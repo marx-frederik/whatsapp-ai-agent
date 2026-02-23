@@ -3,7 +3,7 @@ import { CommandName, DraftCommand } from "../lib/command.schema";
 import { z } from "zod";
 import { ToolCallSchema } from "../lib/toolcall.schema";
 
-type ValidationResult =
+export type ValidationResult =
   | { ok: true }
   | {
       ok: false;
