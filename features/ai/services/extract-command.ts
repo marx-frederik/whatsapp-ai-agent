@@ -1,23 +1,9 @@
 import { openAiClient } from "@/services/ai/openai";
 import {
   CommandJsonSchema,
-  CommandNameSchema,
   DraftCommand,
   DraftCommandSchema,
 } from "@/features/ai/lib/command.schema";
-
-function extractOutputText(response: unknown): string {
-  const output =
-    (response as { output?: Array<{ content?: Array<{ text?: string }> }> })
-      .output ?? [];
-  for (const item of output) {
-    const content = item.content ?? [];
-    for (const part of content) {
-      if (part?.text) return part.text;
-    }
-  }
-  throw new Error("OpenAI response missing output text");
-}
 
 export async function extractCommandFromText(
   text: string,
