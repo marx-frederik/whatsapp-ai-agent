@@ -1,5 +1,5 @@
+import { NormalizedMessage } from "@/features/messaging/schemas/normalized-message";
 import { inngest } from "@/services/inngest/client";
-import { TwilioIncomingMessage } from "@/services/inngest/types/events";
 import { NextRequest, NextResponse } from "next/server";
 import z from "zod";
 
@@ -45,7 +45,7 @@ function getString(
 
 export function normalizeTwilioToIncomingMessage(
   t: TwilioInbound,
-): TwilioIncomingMessage {
+): NormalizedMessage {
   const raw = t as unknown as Record<string, unknown>;
 
   const numMedia = t.NumMedia ?? 0;
@@ -94,7 +94,6 @@ export async function POST(req: NextRequest) {
       contentType.includes("application/x-www-form-urlencoded") ||
       contentType.includes("multipart/form-data")
     ) {
-      console.log("Hello World");
       const form = await req.formData();
 
       // Convert FormData -> plain object (string | File)
@@ -111,7 +110,7 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const normalized: TwilioIncomingMessage =
+      const normalized: NormalizedMessage =
         normalizeTwilioToIncomingMessage(parsed.data);
 
       console.log(normalized);
