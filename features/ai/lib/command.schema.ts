@@ -8,6 +8,8 @@ export const CommandNameSchema = z.enum([
   "clarify",
 ]);
 
+export type CommandName = z.infer<typeof CommandNameSchema>
+
 /**
  * Entities sind bewusst locker typisiert,
  * weil sie je nach Action unterschiedlich aussehen.
