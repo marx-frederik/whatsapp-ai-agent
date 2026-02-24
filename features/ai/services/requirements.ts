@@ -1,7 +1,8 @@
-import { CommandName, DraftCommand } from "../lib/command.schema";
+import { DraftCommand } from "../lib/command.schema";
 
 import { z } from "zod";
-import { ToolCallSchema } from "../lib/toolcall.schema";
+import { ToolArgsSchema } from "../lib/toolcall.schema";
+import { BrainContext } from "../lib/brain.contract";
 
 export type ValidationResult =
   | { ok: true }
@@ -25,10 +26,11 @@ function formatPath(path: PropertyKey[]) {
 }
 
 export function validateRequirements(
-  action: keyof typeof ToolCallSchema,
-  entities: Record<string, unknown>
+  action: keyof typeof ToolArgsSchema,
+  entities: Record<string, unknown>,
+  ctx:BrainContext,
 ): ValidationResult {
-  const result = ToolCallSchema[action].safeParse(entities);
+  const result = ToolArgsSchema[action].safeParse(entities);
 
   if (!result.success) {
     const { missingFields, invalidFields } = extractValidationProblems(

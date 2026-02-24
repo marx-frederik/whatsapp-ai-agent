@@ -1,6 +1,6 @@
-import z from 'zod'
+import z from "zod";
 
-export const ToolCallSchema = {
+export const ToolArgsSchema = {
   "schedule.create": z.object({
     date: z.string().min(1),
     time: z.string().min(1),
@@ -22,7 +22,7 @@ export const ToolCallSchema = {
         z.object({
           skuOrName: z.string().min(1),
           quantity: z.coerce.number().int().positive(),
-        })
+        }),
       )
       .min(1),
     deliveryDate: z.string().optional(),
@@ -39,4 +39,13 @@ export const ToolCallSchema = {
   }),
 } as const;
 
-export type ToolCall = Exclude<keyof typeof ToolCallSchema, never> | "clarify";
+export const ToolNameSchema = z.enum(
+  Object.keys(ToolArgsSchema) as [
+    keyof typeof ToolArgsSchema,
+    ...Array<keyof typeof ToolArgsSchema>,
+  ],
+);
+
+type ToolName = z.infer<typeof ToolNameSchema>;
+
+export type ToolCall = Exclude<keyof typeof ToolArgsSchema, never>;

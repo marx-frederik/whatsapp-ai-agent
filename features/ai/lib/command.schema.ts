@@ -1,21 +1,8 @@
 import { z } from "zod";
+import { ToolNameSchema } from "./toolcall.schema";
 
-export const CommandNameSchema = z.enum([
-  "schedule.create",
-  "costumer.info",
-  "order.create",
-  "team.reminder",
-  "clarify",
-]);
-
-export type CommandName = z.infer<typeof CommandNameSchema>
-
-/**
- * Entities sind bewusst locker typisiert,
- * weil sie je nach Action unterschiedlich aussehen.
- */
 export const DraftCommandSchema = z.object({
-  action: CommandNameSchema,
+  action: ToolNameSchema,
 
   /**
    * 0–1 Confidence vom Modell

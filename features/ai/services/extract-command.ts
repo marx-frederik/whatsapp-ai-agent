@@ -4,10 +4,11 @@ import {
   DraftCommand,
   DraftCommandSchema,
 } from "@/features/ai/lib/command.schema";
+import { BrainContext } from "../lib/brain.contract";
 
 export async function extractCommandFromText(
   text: string,
-  ctx?: string
+  ctx?: BrainContext
 ): Promise<DraftCommand> {
   const response = await openAiClient.responses.create({
     model: "gpt-4o-mini",
