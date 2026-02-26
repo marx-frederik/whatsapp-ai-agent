@@ -1,4 +1,5 @@
-import { extractCommandFromText } from "@/features/ai/services/extract-command";
+
+import { extractToolFromText } from "@/features/ai/brain/extract";
 import { inngest } from "./client";
 import { TwilioIncomingMessageSchema } from "./types/events";
 
@@ -11,7 +12,7 @@ export const twilioMessageReceived = inngest.createFunction(
     //extraction for text command
     if (payload.kind === "text" && payload.text) {
       const command = await step.run("ai-extract-command", async () => {
-        await extractCommandFromText(payload.text ?? "");
+        await extractToolFromText(payload.text ?? "");
       });
       console.log("ai.command", command);
     }
