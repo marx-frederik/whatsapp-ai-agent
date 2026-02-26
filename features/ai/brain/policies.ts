@@ -1,5 +1,5 @@
-import { BrainContext } from "../lib/brain.contract";
-import { ExtractionResult } from "./extract";
+import { BrainContext, ExtractionResult } from "./types";
+
 
 export async function checkPolicies(
     extracted: ExtractionResult,

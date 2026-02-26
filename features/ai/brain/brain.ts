@@ -1,7 +1,6 @@
-import { BrainContext } from "../lib/brain.contract";
-import { ExtractionResult } from "../lib/brain.types";
 import { extractToolFromText } from "./extract";
 import { checkPolicies } from "./policies";
+import { BrainContext, ExtractionResult } from "./types";
 
 export async function process(text: string, ctx: BrainContext) {
   

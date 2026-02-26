@@ -1,17 +1,22 @@
 import { ResponseOutputItem } from "openai/resources/responses/responses.mjs";
-import { ToolArgsSchema, ToolName } from "../lib/toolcall.schema";
 import { zodResponsesFunction } from "openai/helpers/zod.mjs";
 import { openAiClient } from "@/services/ai/openai";
 import { z } from "zod";
+import { ToolArgsSchema, ToolName } from "../tools/types";
 import { SafeParseReturnType } from "zod/v3";
-import { BrainContext } from "../lib/brain.contract";
-import { ExtractionResult } from "../lib/brain.types";
+import { BrainContext, ExtractionResult } from "./types";
+
+
 
 function isFunctionCall(
   item: ResponseOutputItem,
 ): item is Extract<ResponseOutputItem, { type: "function_call" }> {
   return item.type === "function_call";
 }
+
+export type ToolCallUnion = {
+  [N in ToolName]: { type: "tool_call"; tool: N; args: ArgsOf<N> };
+}[ToolName];
 
 export const openaiTools = ToolArgsSchema.map((t) =>
   zodResponsesFunction({
