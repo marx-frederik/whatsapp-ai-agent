@@ -24,4 +24,9 @@ export const orderCreateTool = defineTool({
       itemsCount: args.items.length,
     };
   },
+
+  render(result,ctx){
+    console.log("Bestellung erstellt")
+    console.log(`ID: ${result.orderId}, Kunde:${result.customerIdentifier}`)
+  }
 });

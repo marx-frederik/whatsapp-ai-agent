@@ -9,6 +9,7 @@ export function defineTool<
   description: string;
   schema: Schema;
   execute: (args: z.infer<Schema>, ctx: any) => Promise<Result> | Result;
+  render: (result: Result, ctx: any) => void
 }) {
   return def;
 }
