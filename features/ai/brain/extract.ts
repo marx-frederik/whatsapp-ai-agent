@@ -1,12 +1,25 @@
 import { ResponseOutputItem } from "openai/resources/responses/responses.mjs";
-import { zodResponsesFunction } from "openai/helpers/zod.mjs";
 import { openAiClient } from "@/services/ai/openai";
 import { z } from "zod";
-import { ToolArgsSchema, ToolName } from "../tools/types";
 import { SafeParseReturnType } from "zod/v3";
 import { BrainContext, ExtractionResult } from "./types";
+import { ToolName } from "../tools/types";
+import { ToolRegistry } from "../tools/types";
+import { openaiTools } from "../tools/openai";
 
+export type ToolCallUnion = {
+  [N in ToolName]: { type: "tool_call"; tool: N; args: ArgsOf<N> };
+}[ToolName];
 
+type ToolEntry = (typeof ToolRegistry)[number];
+
+type ArgsOf<N extends ToolName> = z.infer<
+  Extract<ToolEntry, { name: N }>["schema"]
+>;
+
+export function isToolName(t: string): t is ToolName {
+  return ToolRegistry.some((a) => a.name === t);
+}
 
 function isFunctionCall(
   item: ResponseOutputItem,
@@ -14,28 +27,8 @@ function isFunctionCall(
   return item.type === "function_call";
 }
 
-export type ToolCallUnion = {
-  [N in ToolName]: { type: "tool_call"; tool: N; args: ArgsOf<N> };
-}[ToolName];
-
-export const openaiTools = ToolArgsSchema.map((t) =>
-  zodResponsesFunction({
-    name: t.name,
-    description: t.description,
-    parameters: t.schema, // <- Zod Args Schema (allowed+required)
-  }),
-);
-
-type ToolEntry = (typeof ToolArgsSchema)[number];
-
-type ArgsOf<N extends ToolName> = z.infer<Extract<ToolEntry, { name: N }>["schema"]>;
-
-export function isToolName(t: string): t is ToolName {
-  return ToolArgsSchema.some((a) => a.name === t);
-}
-
 export function getToolSchema<N extends ToolName>(name: N) {
-  const entry = ToolArgsSchema.find(
+  const entry = ToolRegistry.find(
     (s): s is Extract<ToolEntry, { name: N }> => s.name === name,
   );
   if (!entry) {
@@ -49,7 +42,7 @@ export function safeParseToolArgs<N extends ToolName>(
   toolName: N,
   rawArgs: unknown,
 ): SafeParseReturnType<unknown, ArgsOf<N>> {
-  const toolArgs = ToolArgsSchema.find(
+  const toolArgs = ToolRegistry.find(
     (t): t is Extract<ToolEntry, { name: N }> => t.name === toolName,
   );
   if (!toolArgs) throw new Error(`Unknown tool: ${toolName}`);
@@ -59,7 +52,7 @@ export function safeParseToolArgs<N extends ToolName>(
 
 export async function extractToolFromText(
   text: string,
-  ctx?:BrainContext
+  ctx?: BrainContext,
 ): Promise<ExtractionResult> {
   const resp = await openAiClient.responses.create({
     model: "gpt-4o-mini",
