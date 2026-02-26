@@ -39,12 +39,13 @@ function banner(title: string) {
 }
 
 async function main() {
-  const { ToolArgsSchema } = await import("@/features/ai/tools/types");
-  const { isToolName, openaiTools, safeParseToolArgs } =
+  const { ToolRegistry } = await import("@/features/ai/tools/types");
+  const { isToolName, safeParseToolArgs } =
     await import("@/features/ai/brain/extract");
+  const { openaiTools } = await import("@/features/ai/tools/openai");
   const { openAiClient } = await import("@/services/ai/openai");
   function toolNames() {
-    return ToolArgsSchema.map((t) => t.name).join(", ");
+    return ToolRegistry.map((t) => t.name).join(", ");
   }
 
   banner("OPENAI SMOKE TEST (real API)");
