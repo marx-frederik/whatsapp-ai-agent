@@ -1,11 +1,12 @@
-import { ToolRegistry } from "../tools/types";
-import { ToolCallUnion } from "./extract";
+import { ToolCallUnion, ToolRegistry } from "../tools/types";
 import { BrainContext } from "./types";
 
-export function executeTool(toolCall: Omit<ToolCallUnion, "type">, ctx:BrainContext) {
-    const def = ToolRegistry.find(t => toolCall.tool === t.name)
-    if (!def){
-        throw new Error(`Unknown tool: ${toolCall.tool}`);
-    }
-    return def.execute(toolCall.args as any, ctx)
-}
+export async function executeTool(call: ToolCallUnion, ctx?:BrainContext): Promise<unknown> {
+    const entry = ToolRegistry.find((t) => t.name === call.tool);
+    if (!entry) throw new Error(`Unknown tool: ${call.tool}`);
+  
+    // entry.execute erwartet (idealerweise) ArgsOf<typeof call.tool>
+     return entry.execute(call.args as any,ctx);
+  }
+  
+  

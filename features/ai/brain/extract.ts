@@ -1,15 +1,10 @@
 import { ResponseOutputItem } from "openai/resources/responses/responses.mjs";
 import { openAiClient } from "@/services/ai/openai";
-import { z } from "zod";
-import { SafeParseReturnType } from "zod/v3";
 import { BrainContext, ExtractionResult } from "./types";
 import { ToolName } from "../tools/types";
 import { ToolRegistry } from "../tools/types";
 import { openaiTools } from "../tools/openai";
-
-export type ToolCallUnion = {
-  [N in ToolName]: { type: "tool_call"; tool: N; args: ArgsOf<N> };
-}[ToolName];
+import { z } from "zod";
 
 type ToolEntry = (typeof ToolRegistry)[number];
 
@@ -38,16 +33,20 @@ export function getToolSchema<N extends ToolName>(name: N) {
   return entry.schema;
 }
 
+export type SafeParseResult<T> =
+  | { success: true; data: T }
+  | { success: false; error: z.ZodError };
+
 export function safeParseToolArgs<N extends ToolName>(
   toolName: N,
   rawArgs: unknown,
-): SafeParseReturnType<unknown, ArgsOf<N>> {
-  const toolArgs = ToolRegistry.find(
+): SafeParseResult<ArgsOf<N>> {
+  const toolEntry = ToolRegistry.find(
     (t): t is Extract<ToolEntry, { name: N }> => t.name === toolName,
   );
-  if (!toolArgs) throw new Error(`Unknown tool: ${toolName}`);
-  const result = toolArgs.schema.safeParse(rawArgs);
-  return result as SafeParseReturnType<unknown, ArgsOf<N>>;
+  if (!toolEntry) throw new Error(`Unknown tool: ${toolName}`);
+
+  return toolEntry.schema.safeParse(rawArgs) as SafeParseResult<ArgsOf<N>>;
 }
 
 export async function extractToolFromText(
@@ -70,7 +69,6 @@ export async function extractToolFromText(
     parallel_tool_calls: false, // empfehlenswert am Anfang: genau 1 Toolcall
   });
 
-  console.log(resp);
   // 1) Toolcall finden (Responses: output items, function_call) :contentReference[oaicite:2]{index=2}
   const call = resp.output.find((item) => isFunctionCall(item));
 
@@ -85,22 +83,12 @@ export async function extractToolFromText(
     return { type: "text", text: "Unknown tool." };
   }
 
-  const raw =
+  const rawArgs =
     typeof call.arguments === "string"
       ? JSON.parse(call.arguments)
       : call.arguments;
 
-  switch (call.name) {
-    case "order_create": {
-      const parsed = safeParseToolArgs("order_create", raw);
-      if (!parsed.success) return { type: "text", text: "Invalid args." };
-      return { type: "tool_call", tool: "order_create", args: parsed.data };
-    }
-
-    case "customer_lookup": {
-      const parsed = safeParseToolArgs("customer_lookup", raw);
-      if (!parsed.success) return { type: "text", text: "Invalid args." };
-      return { type: "tool_call", tool: "customer_lookup", args: parsed.data };
-    }
-  }
+  return { type: "tool_call", tool: call.name, args: rawArgs };
 }
+
+
