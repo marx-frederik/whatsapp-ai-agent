@@ -4,16 +4,22 @@ import { defineTool } from "../defineTool";
 export const orderCreateTool = defineTool({
   name: "order_create",
   description: "Erstellt eine Bestellung.",
-  schema: z.object({
-    customerIdentifier: z.string().min(1),
-    items: z.array(
-      z.object({
-        skuOrName: z.string().min(1),
-        quantity: z.coerce.number().int().positive(),
-      }).strict()
-    ).min(1),
-    note: z.string().optional().nullable(),
-  }).strict(),
+  schema: z
+    .object({
+      customerIdentifier: z.string().min(1),
+      items: z
+        .array(
+          z
+            .object({
+              skuOrName: z.string().min(1),
+              quantity: z.coerce.number().int().positive(),
+            })
+            .strict(),
+        )
+        .min(1),
+      note: z.string().optional().nullable(),
+    })
+    .strict(),
 
   async execute(args, ctx) {
     // MVP stub
@@ -25,8 +31,7 @@ export const orderCreateTool = defineTool({
     };
   },
 
-  render(result,ctx){
-    console.log("Bestellung erstellt")
-    console.log(`ID: ${result.orderId}, Kunde:${result.customerIdentifier}`)
-  }
+  render(args, result, ctx) {
+    return `Bestellung erstellt. ID: ${result.orderId}, Kunde: ${result.customerIdentifier}, Positionen: ${result.itemsCount}`;
+  },
 });

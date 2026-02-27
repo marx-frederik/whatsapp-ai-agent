@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ArgsOf } from "./types";
 
 export function defineTool<
   const Name extends string,
@@ -9,7 +10,7 @@ export function defineTool<
   description: string;
   schema: Schema;
   execute: (args: z.infer<Schema>, ctx: any) => Promise<Result> | Result;
-  render: (result: Result, ctx: any) => void
+  render: (args: z.infer<Schema>, result: Result, ctx: any) => string;
 }) {
   return def;
-}
+} 

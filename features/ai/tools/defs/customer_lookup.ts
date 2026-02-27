@@ -22,13 +22,15 @@ export const customerLookupTool = defineTool({
     return { type: "customer_not_found" as const, query: args };
   },
 
-  async render(result, ctx) {
+  render(args, result, ctx) {
     if (result.type === "customer_found") {
-      console.log("Hier die Benutzerdaten:");
-      console.log(result.displayName);
+      return `Kunde gefunden: ${result.displayName} (ID: ${result.customerId}).`;
     }
     if (result.type === "customer_not_found") {
-      console.log("Der Benutzer konnte nicht gefunden werden.");
+      return "Der Kunde konnte nicht gefunden werden.";
     }
+
+    const _exhaustive: never = result;
+    return _exhaustive;
   },
 });
