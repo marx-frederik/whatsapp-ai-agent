@@ -9,7 +9,7 @@ export function validateToolCall(
   const parsed = safeParseToolArgs(extracted.tool, extracted.args); // gibt success/data oder error
 
   if (!parsed.success) {
-    const missingFields = getMissingFields(parsed.error); // -> string[]
+    const missingFields = getMissingFields(parsed.error.issues);
     return {
       type: "tool_call_missing",
       tool: extracted.tool,
@@ -25,20 +25,9 @@ export function validateToolCall(
   } as ToolCallUnion;
 }
 
-export function getMissingFields(err: z.ZodError): string[] {
-  const missing = new Set<string>();
-
-  for (const issue of err.issues) {
-    // simplest: “invalid_type” at path -> missing candidate
-    // (oder später zod4 reportInput: true => issue.input === undefined)
-    if (issue.code === "invalid_type") {
-      const p = issue.path.join(".");
-      if (p) missing.add(p);
-    }
-  }
-
-  // minimieren: wenn "customer" fehlt, nicht "customer.phone" zusätzlich
-  return minimizeMissing([...missing]);
+export function getMissingFields(issues: z.ZodIssue[]): string[] {
+  const paths = issues.map(i => i.path.join(".")).filter(Boolean);
+  return minimizeMissing(Array.from(new Set(paths)));
 }
 
 function minimizeMissing(paths: string[]): string[] {
