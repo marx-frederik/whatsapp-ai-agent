@@ -60,6 +60,10 @@ export async function extractToolFromText(
         role: "system",
         content: `Du musst GENAU EINES der Tools aufrufen oder gar keines.
                 Wenn kein Tool passt, wähle keins aus. 
+                Erfinde auf gar keinen Fall Felder, fülle die erforderlichen Felder nur aus, 
+                wenn die Informationen im Text vorhanden sind, ansonsten lasse sie leer.
+                Wenn der Nutzer bestellen will → immer order_create callen. Unklare Werte (z.B. “viele”) → als "" oder null setzen. 
+                Keine “normalen” Antworten, solange Tool passt.
                 `,
       },
       { role: "user", content: text },
@@ -90,5 +94,3 @@ export async function extractToolFromText(
 
   return { type: "tool_call", tool: call.name, args: rawArgs };
 }
-
-
