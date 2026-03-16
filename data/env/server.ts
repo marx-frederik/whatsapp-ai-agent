@@ -3,7 +3,7 @@ import { z } from "zod";
  
 export const env = createEnv({
   server: {
-    OPEN_AI_API_KEY: z.string().min(1),
+    OPENAI_API_KEY: z.string().min(1),
   },
  
   /**
