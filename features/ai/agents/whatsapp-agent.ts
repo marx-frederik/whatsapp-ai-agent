@@ -1,0 +1,39 @@
+// definition of agent
+
+import { Agent } from "@openai/agents";
+import type { ModelSettings, Tool } from "@openai/agents";
+
+type WhatsAppAgentModelSettings = Pick<
+  ModelSettings,
+  "temperature" | "topP" | "maxTokens" | "store"
+>;
+
+export function createWhatsAppAgent(
+  tools: Tool[],
+  modelSettings: WhatsAppAgentModelSettings = {},
+) {
+  const {
+    temperature = 0.2,
+    topP = 1,
+    maxTokens = 1024,
+    store = true,
+  } = modelSettings;
+
+  return new Agent({
+    name: "WhatsApp Agent",
+    instructions: `Du bist ein WhatsApp-Assistent für Bestellungen.
+Antworte kurz, freundlich und klar.
+Wenn Pflichtangaben fehlen, stelle gezielte Rückfragen.
+Erfinde keine Kundendaten, Mengen oder Bestellstatus.
+Nutze nur definierte Tools.`.trim(),
+    model: "gpt-4.1-mini",
+    tools,
+    modelSettings: {
+      temperature,
+      topP,
+      maxTokens,
+      store,
+    },
+    //tool: agentTools,
+  })
+}
