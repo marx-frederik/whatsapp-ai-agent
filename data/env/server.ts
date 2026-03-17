@@ -1,27 +1,30 @@
 import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
- 
+
 export const env = createEnv({
   server: {
     OPENAI_API_KEY: z.string().min(1),
+    REDIS_URL: z.string().min(1),
+    REDIS_KEY:z.string().min(1),
+    REDIS_PORT:z.coerce.number(),
   },
- 
+
   /**
    * The prefix that client-side variables must have. This is enforced both at
    * a type-level and at runtime.
    */
   clientPrefix: "PUBLIC_",
- 
+
   client: {
     //PUBLIC_CLERK_PUBLISHABLE_KEY: z.string().min(1),
   },
- 
+
   /**
    * What object holds the environment variables at runtime. This is usually
    * `process.env` or `import.meta.env`.
    */
   runtimeEnv: process.env,
- 
+
   /**
    * By default, this library will feed the environment variables directly to
    * the Zod validator.
@@ -37,3 +40,4 @@ export const env = createEnv({
    */
   emptyStringAsUndefined: true,
 });
+
