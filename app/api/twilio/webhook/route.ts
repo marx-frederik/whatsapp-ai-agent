@@ -1,5 +1,7 @@
-import { process } from "@/features/ai/brain/brain";
+import { env } from "@/data/env/server";
+import { brainAgent } from "@/features/ai/brain/brain.agent";
 import { NormalizedMessage } from "@/features/messaging/schemas/normalized-message";
+import { sendWhatsappMessage } from "@/services/twilio/send-message";
 import { NextResponse } from "next/server";
 
 function toTwiML(message: string) {
@@ -15,40 +17,47 @@ function toTwiML(message: string) {
 }
 
 export async function POST(req: Request) {
-  // Twilio sends x-www-form-urlencoded by default
-  const formData = await req.formData();
-  const form: Record<string, string> = {};
-  for (const [k, v] of formData.entries()) form[k] = String(v);
+  try {
+    // Twilio sends x-www-form-urlencoded by default
+    const formData = await req.formData();
 
-  const normalized = normalizeTwilioIncoming(form);
+    const form: Record<string, string> = {};
+    for (const [k, v] of formData.entries()) form[k] = String(v);
 
-  if (normalized.kind !== "text" || !normalized.text) {
-    return new NextResponse(toTwiML("Ich konnte die Nachricht nicht lesen."), {
-      status: 200,
-      headers: { "Content-Type": "text/xml" },
+    const normalized = normalizeTwilioIncoming(form);
+    console.log("Normalized message:", normalized);
+
+    if (normalized.kind !== "text" || !normalized.text) {
+      return new NextResponse(
+        toTwiML("Ich konnte die Nachricht nicht lesen."),
+        {
+          status: 200,
+          headers: { "Content-Type": "text/xml" },
+        },
+      );
+    }
+    const brainContext = {
+      locale: "de-DE",
+      timezone: "Europe/Berlin",
+    };
+
+    const result = await brainAgent.process({
+      chatId: normalized.from,
+      text: normalized.text,
+      brainContext,
     });
+
+    await sendWhatsappMessage({
+      from: env.TWILIO_WHATSAPP_FROM,
+      to: normalized.from,
+      body: result.finalOutput,
+    });
+
+    return new NextResponse(null, { status: 200 });
+  } catch (err) {
+    console.error("Twilio webhook error", err);
+    return new NextResponse("Internal Server Error", { status: 500 });
   }
-  console.log(normalized);
-  const out = await process({
-    userId: normalized.from,
-    text: normalized.text,
-    locale: "de-DE",
-    timezone: "Europe/Berlin",
-  });
-
-  const replyText =
-    out.kind === "reply"
-      ? out.text
-      : out.kind === "clarify"
-        ? out.text
-        : out.kind === "error"
-          ? out.text
-          : (out.text ?? "Wie kann ich helfen?");
-
-  return new NextResponse(toTwiML(replyText), {
-    status: 200,
-    headers: { "Content-Type": "text/xml" },
-  });
 }
 
 export function normalizeTwilioIncoming(

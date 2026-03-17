@@ -5,8 +5,11 @@ export const env = createEnv({
   server: {
     OPENAI_API_KEY: z.string().min(1),
     REDIS_URL: z.string().min(1),
-    REDIS_KEY:z.string().min(1),
-    REDIS_PORT:z.coerce.number(),
+    REDIS_KEY: z.string().min(1),
+    REDIS_PORT: z.coerce.number(),
+    TWILIO_SID: z.string().min(1),
+    TWILIO_AUTH_TOKEN: z.string().min(1),
+    TWILIO_WHATSAPP_FROM: z.string().min(1),
   },
 
   /**
@@ -40,4 +43,3 @@ export const env = createEnv({
    */
   emptyStringAsUndefined: true,
 });
-
