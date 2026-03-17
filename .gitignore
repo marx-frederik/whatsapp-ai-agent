@@ -42,3 +42,6 @@ next-env.d.ts
 
 #just for understanding
 /test/*
+
+#logging
+/logs/*
