@@ -1,46 +1,43 @@
 import { runWhatsappAgent } from "./run-whatsapp-agent";
-import { toolByName } from "../tools/agent-tool-bridge";
 import type { NormalizedMessage } from "@/features/messaging/schemas/normalized-message";
+import { getChatSession, setChatSession } from "@/services/redis/session-store";
+import { ToolName } from "../tools/types";
+import { BrainContext } from "./types";
+
+type BrainAgentResult = {
+  finalOutput: string;
+  responseId?: string;
+  toolNames?: ToolName[];
+}
+
+type BrainAgentInput = {
+  chatId:string;
+  text?:string;
+  brainContext?:BrainContext;
+}
 
 export const brainAgent = {
-  async process(msg: NormalizedMessage) {
-    const brainContext = {
-      locale: "de-DE",
-      timezone: "Europe/Berlin",
-    };
+  async process({chatId, text, brainContext}:BrainAgentInput):Promise<BrainAgentResult> {
+
+    const session = await getChatSession(chatId);
 
     const result = await runWhatsappAgent({
-      text: msg.text?.trim() ?? "",
+      chatId: chatId,
+      text: text?.trim() ?? "",
+      previousResponseId: session?.lastResponseId,
       brainContext,
     });
 
-    const lastTool = result.executedTools[result.executedTools.length - 1];
-
-    if (lastTool) {
-      const toolDef = toolByName.get(lastTool.toolName);
-
-      if (toolDef) {
-        const replyText = toolDef.render(
-          lastTool.args as any,
-          lastTool.result as any,
-          brainContext,
-        );
-
-        return {
-          replyText,
-          raw: result.raw,
-        };
-      }
-    }
-
-    const replyText =
-      typeof result.finalOutput === "string"
-        ? result.finalOutput
-        : JSON.stringify(result.finalOutput);
+    await setChatSession({
+      chatId,
+      lastResponseId: result.responseId,
+      updatedAt: new Date().toISOString(),
+    });
 
     return {
-      replyText,
-      raw: result.raw,
+      finalOutput: result.outputText,
+      responseId: result.responseId,
+      toolNames: result.toolNames,
     };
   },
 };
