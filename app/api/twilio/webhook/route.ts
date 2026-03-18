@@ -1,5 +1,6 @@
 import { env } from "@/data/env/server";
 import { brainAgent } from "@/features/ai/brain/brain.agent";
+import { logConversationTrace } from "@/features/ai/logging/conversation-trace";
 import { NormalizedMessage } from "@/features/messaging/schemas/normalized-message";
 import { sendWhatsappMessage } from "@/services/twilio/send-message";
 import { NextResponse } from "next/server";
@@ -24,10 +25,10 @@ export async function POST(req: Request) {
     const form: Record<string, string> = {};
     for (const [k, v] of formData.entries()) form[k] = String(v);
 
-    const normalized = normalizeTwilioIncoming(form);
-    console.log("Normalized message:", normalized);
+    const normalizedMsg = normalizeTwilioIncoming(form);
+    console.log("Normalized message:", normalizedMsg);
 
-    if (normalized.kind !== "text" || !normalized.text) {
+    if (normalizedMsg.kind !== "text" || !normalizedMsg.text) {
       return new NextResponse(
         toTwiML("Ich konnte die Nachricht nicht lesen."),
         {
@@ -42,15 +43,25 @@ export async function POST(req: Request) {
     };
 
     const result = await brainAgent.process({
-      chatId: normalized.from,
-      text: normalized.text,
+      chatId: normalizedMsg.from,
+      text: normalizedMsg.text,
       brainContext,
     });
 
     await sendWhatsappMessage({
       from: env.TWILIO_WHATSAPP_FROM,
-      to: normalized.from,
+      to: normalizedMsg.from,
       body: result.finalOutput,
+    });
+
+    logConversationTrace({
+      messageId: normalizedMsg.messageId,
+      from: normalizedMsg.from,
+      incomingText: normalizedMsg.text,
+      outputText: result.finalOutput,
+      toolNames: result.toolNames,
+      finalOutput: result.finalOutput,
+      timestamp: new Date().toISOString(),
     });
 
     return new NextResponse(null, { status: 200 });
