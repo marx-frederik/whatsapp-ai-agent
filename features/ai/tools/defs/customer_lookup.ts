@@ -1,36 +1,27 @@
 import { z } from "zod";
 import { defineTool } from "../defineTool";
+import { getBusinessProvider } from "@/features/integrations/business/get-business-provider";
+import { CustomerLookupArgs } from "@/features/integrations/business/type";
+
+export const CustomerLookupSchema = z
+  .object({
+    customerIdentifier: z.string().optional().nullable(),
+    phone: z.string().optional().nullable(),
+    email: z.string().email().optional().nullable(),
+  })
+  .strict();
+
 export const customerLookupTool = defineTool({
   name: "customer_lookup",
   description: "Sucht einen Kunden (Identifier, Telefon oder E-Mail).",
-  schema: z
-    .object({
-      customerIdentifier: z.string().optional().nullable(),
-      phone: z.string().optional().nullable(),
-      email: z.string().email().optional().nullable(),
-    })
-    .strict(),
+  schema: CustomerLookupSchema,
 
-  async execute(args, ctx) {
-    if (args.customerIdentifier === "123") {
-      return {
-        type: "customer_found" as const,
-        customerId: "123",
-        displayName: "Testkunde 123",
-      };
-    }
-    return { type: "customer_not_found" as const, query: args };
+  async execute(args: CustomerLookupArgs, ctx) {
+    const provider = getBusinessProvider();
+    return await provider.customerLookup(args);
   },
 
   render(args, result, ctx) {
-    if (result.type === "customer_found") {
-      return `Kunde gefunden: ${result.displayName} (ID: ${result.customerId}).`;
-    }
-    if (result.type === "customer_not_found") {
-      return "Der Kunde konnte nicht gefunden werden.";
-    }
-
-    const _exhaustive: never = result;
-    return _exhaustive;
+    return "null";
   },
 });
