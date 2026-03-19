@@ -11,7 +11,7 @@ type ToolDefinition<
   name: TName;
   description: string;
   schema: TSchema;
-  execute: (args: z.infer<TSchema>, ctx: BrainContext) => MaybePromise<TResult>;
+  execute: (args: z.infer<TSchema>, ctx: BrainContext, debug?:boolean) => MaybePromise<TResult>;
   render: (args: z.infer<TSchema>, result: TResult, ctx: BrainContext) => string;
 };
 

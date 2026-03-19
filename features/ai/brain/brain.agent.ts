@@ -8,25 +8,33 @@ type BrainAgentResult = {
   finalOutput: string;
   responseId?: string;
   toolNames?: ToolName[];
-}
+};
 
 type BrainAgentInput = {
-  chatId:string;
-  text?:string;
-  brainContext?:BrainContext;
-}
+  chatId: string;
+  text?: string;
+  brainContext?: BrainContext;
+  debug?: boolean;
+};
 
 export const brainAgent = {
-  async process({chatId, text, brainContext}:BrainAgentInput):Promise<BrainAgentResult> {
-
+  async process({
+    chatId,
+    text,
+    brainContext,
+    debug,
+  }: BrainAgentInput): Promise<BrainAgentResult> {
     const session = await getChatSession(chatId);
 
-    const result = await runWhatsappAgent({
-      chatId: chatId,
-      text: text?.trim() ?? "",
-      previousResponseId: session?.lastResponseId,
-      brainContext,
-    });
+    const result = await runWhatsappAgent(
+      {
+        chatId: chatId,
+        text: text?.trim() ?? "",
+        previousResponseId: session?.lastResponseId,
+        brainContext,
+      },
+      debug ?? false,
+    );
 
     await setChatSession({
       chatId,

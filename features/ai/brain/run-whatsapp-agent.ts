@@ -20,6 +20,7 @@ export type RunWhatsappAgentResult = {
 
 export async function runWhatsappAgent(
   input: RunWhatsappAgentInput,
+  debug:boolean,
 ): Promise<RunWhatsappAgentResult> {
   return withTrace("whatsapp-agent-run", async () => {
     // Build tools per run so context and tool execution tracking are scoped to this request.
@@ -33,6 +34,10 @@ export async function runWhatsappAgent(
       [{ role: "user", content: [{ type: "input_text", text: input.text }] }],
       { previousResponseId: input.previousResponseId },
     );
+
+    if(debug){
+      console.log("Runner Result:", result)
+    }
 
     const toolNames: ToolName[] =
       result.newItems

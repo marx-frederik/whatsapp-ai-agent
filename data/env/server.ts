@@ -1,6 +1,10 @@
 import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
 
+const isTest =
+  process.env.NODE_ENV === "test" ||
+  process.env.VITEST === "true";
+
 export const env = createEnv({
   server: {
     OPENAI_API_KEY: z.string().min(1),
@@ -48,4 +52,5 @@ export const env = createEnv({
    * explicitly specify this option as true.
    */
   emptyStringAsUndefined: true,
+  skipValidation:isTest,
 });

@@ -1,10 +1,11 @@
 // src/lib/supabase/server.ts
 import { env } from "@/data/env/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "./database.types";
 
-let supabaseServer: ReturnType<typeof createClient> | null = null;
+let supabaseServer: SupabaseClient<Database> | null = null;
 
-export function getSupabaseServer() {
+export function getSupabaseServer(): SupabaseClient<Database> {
   if (supabaseServer) {
     return supabaseServer;
   }
@@ -17,6 +18,6 @@ export function getSupabaseServer() {
     );
   }
 
-  supabaseServer = createClient(url, serviceRoleKey);
+  supabaseServer = createClient<Database>(url, serviceRoleKey);
   return supabaseServer;
 }
