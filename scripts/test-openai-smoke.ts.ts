@@ -2,24 +2,23 @@
 // Run: pnpm tsx scripts/test-openai-smoke.ts.ts
 //
 // This is a smoke test against the real OpenAI API.
-// Goal: verify that the brain flow works end-to-end.
+// Goal: verify that the agent flow works end-to-end.
 // It is NOT a deterministic unit test.
 
-import { BrainOutput } from "@/features/ai/brain/types";
 import dotenv from "dotenv";
+import { ToolName } from "@/features/ai/tools/types";
 
 dotenv.config({ path: ".env.local" });
 
 type SmokeOutput =
-  | { kind: "reply"; text: string }
-  | { kind: "clarify"; text: string; pending: { tool: string } }
+  | { kind: "reply"; text: string; tools?: ToolName[] }
   | { kind: "error"; text: string; debug?: unknown };
 
 type SmokeCase = {
   label: string;
   input: string;
   expect?: {
-    kind?: SmokeOutput["kind"];
+    kind?: SmokeOutput["kind"] | "reply";
     tool?: string;
     allowNoTool?: boolean;
   };
@@ -49,12 +48,12 @@ const CASES: SmokeCase[] = [
   {
     label: "order_create multiple missing fields",
     input: "Bitte 2x  und Wasser",
-    expect: { kind: "clarify", tool: "order_create" },
+    expect: { kind: "reply", tool: "order_create" },
   },
   {
     label: "order_create multiple missing fields",
     input: "Bitte viele kg Mehl bestellen",
-    expect: { kind: "clarify", tool: "order_create" },
+    expect: { kind: "reply", tool: "order_create" },
   },
 ];
 
@@ -64,7 +63,7 @@ function banner(title: string) {
   console.log("=".repeat(60));
 }
 
-function assertMatchesExpectation(output: BrainOutput, test: SmokeCase) {
+function assertMatchesExpectation(output: SmokeOutput, test: SmokeCase) {
   if (output.kind === "error") {
     throw new Error(output.text);
   }
@@ -76,23 +75,17 @@ function assertMatchesExpectation(output: BrainOutput, test: SmokeCase) {
   }
 
   if (test.expect?.tool) {
-    if (output.kind !== "clarify") {
+    if (!output.tools?.includes(test.expect.tool as ToolName)) {
       throw new Error(
-        `Expected tool '${test.expect.tool}' to be observable via clarify output, got '${output.kind}'`,
-      );
-    }
-
-    if (output.pending.tool !== test.expect.tool) {
-      throw new Error(
-        `Expected tool '${test.expect.tool}', got '${output.pending.tool}'`,
+        `Expected tool '${test.expect.tool}', got '${output.tools?.join(", ") ?? "none"}'`,
       );
     }
   }
 }
 
 async function main() {
-  const [{ process }, { ToolRegistry }] = await Promise.all([
-    import("@/features/ai/brain/brain"),
+  const [{ brainAgent }, { ToolRegistry }] = await Promise.all([
+    import("@/features/ai/brain/brain.agent"),
     import("@/features/ai/tools/types"),
   ]);
 
@@ -107,15 +100,22 @@ async function main() {
     banner(`CASE: ${test.label}`);
     console.log("INPUT:", test.input);
 
-    const output = await process({
-      userId:"123",
+    const output = await brainAgent.process({
+      chatId: "smoke-chat",
       text: test.input,
-      locale: "de-DE",
-      timezone: "GMT+0",
+      brainContext: {
+        locale: "de-DE",
+        timezone: "Europe/Berlin",
+      },
     });
 
-    console.log("OUTPUT:", output);
-    assertMatchesExpectation(output, test);
+    const normalized: SmokeOutput = {
+      kind: "reply",
+      text: output.finalOutput,
+      tools: output.toolNames,
+    };
+    console.log("OUTPUT:", normalized);
+    assertMatchesExpectation(normalized, test);
   }
 
   let failed = 0;
@@ -124,9 +124,10 @@ async function main() {
     try {
       await runOne(c);
       console.log("PASS");
-    } catch (e: any) {
+    } catch (e: unknown) {
       failed++;
-      console.error("FAIL:", e?.message ?? e);
+      const message = e instanceof Error ? e.message : String(e);
+      console.error("FAIL:", message);
     }
   }
 
