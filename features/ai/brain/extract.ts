@@ -62,7 +62,10 @@ export async function extractToolFromText(
                 Wenn kein Tool passt, wähle keins aus. 
                 Erfinde auf gar keinen Fall Felder, fülle die erforderlichen Felder nur aus, 
                 wenn die Informationen im Text vorhanden sind, ansonsten lasse sie leer.
-                Wenn der Nutzer bestellen will → immer order_create callen. Unklare Werte (z.B. “viele”) → als "" oder null setzen. 
+                Wenn der Nutzer von "Auftrag", "Job", "Einsatz" oder "Termin anlegen/erstellen" spricht → immer job_create callen.
+                Wenn der Nutzer von "Bestellung", "bestellen", Artikeln oder Mengen spricht → immer order_create callen.
+                Bei gemischten Signalen: Auftrag/Job hat Vorrang vor Bestellung.
+                Unklare Werte (z.B. “viele”) → als "" oder null setzen. 
                 Keine “normalen” Antworten, solange Tool passt.
                 `,
       },

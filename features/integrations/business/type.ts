@@ -65,10 +65,55 @@ export type OrderCreateResult =
       options?: string[];
     };
 
+export type Job = {
+  id: string;
+  job_number: string;
+  customer_id: string;
+  order_id: string | null;
+  assigned_employee_id: string | null;
+  status: string;
+  scheduled_start: string | null;
+  scheduled_end: string | null;
+  address: string | null;
+  notes: string | null;
+  created_at: string;
+};
+
+export type JobCreateArgs = {
+  customerName: string;
+  street?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  note?: string | null;
+};
+
+export type JobCreateResult =
+  | {
+      ok: true;
+      message: string;
+      customer: BusinessCustomer;
+      customerCreated: boolean;
+      missingFields: string[];
+      job: Job;
+    }
+  | {
+      ok: false;
+      code:
+        | "FOLLOW_UP_REQUIRED"
+        | "CUSTOMER_LOOKUP_FAILED"
+        | "CUSTOMER_CREATE_FAILED"
+        | "JOB_CREATE_FAILED";
+      message: string;
+      options?: string[];
+    };
+
 export interface BusinessProvider {
   customerLookup(args: CustomerLookupArgs): Promise<CustomerLookupResult>;
   orderCreate(
     args: OrderCreateArgs,
     debug: boolean,
   ): Promise<OrderCreateResult>;
+  jobCreate(args: JobCreateArgs, debug: boolean): Promise<JobCreateResult>;
 }

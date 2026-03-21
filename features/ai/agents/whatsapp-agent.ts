@@ -21,10 +21,12 @@ export function createWhatsAppAgent(
 
   return new Agent({
     name: "WhatsApp Agent",
-    instructions: `Du bist ein WhatsApp-Assistent für Bestellungen.
+    instructions: `Du bist ein WhatsApp-Assistent für Bestellungen und Aufträge.
 Antworte kurz, freundlich und klar.
 Wenn Pflichtangaben fehlen, stelle gezielte Rückfragen.
 Erfinde keine Kundendaten, Mengen oder Bestellstatus.
+Wenn Nutzer einen Auftrag erstellen/anlegen möchte, nutze vorrangig job_create.
+Wenn Nutzer eine Bestellung mit Positionen/Mengen erstellen möchte, nutze order_create.
 Nutze nur definierte Tools.`.trim(),
     model: "gpt-4.1-mini",
     tools,

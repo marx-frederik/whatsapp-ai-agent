@@ -51,6 +51,48 @@ export type Database = {
         };
         Relationships: [];
       };
+      jobs: {
+        Row: {
+          id: string;
+          job_number: string;
+          customer_id: string;
+          order_id: string | null;
+          assigned_employee_id: string | null;
+          status: string;
+          scheduled_start: string | null;
+          scheduled_end: string | null;
+          address: string | null;
+          notes: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          job_number: string;
+          customer_id: string;
+          order_id?: string | null;
+          assigned_employee_id?: string | null;
+          status?: string;
+          scheduled_start?: string | null;
+          scheduled_end?: string | null;
+          address?: string | null;
+          notes?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          job_number?: string;
+          customer_id?: string;
+          order_id?: string | null;
+          assigned_employee_id?: string | null;
+          status?: string;
+          scheduled_start?: string | null;
+          scheduled_end?: string | null;
+          address?: string | null;
+          notes?: string | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
       orders: {
         Row: {
           id: string;

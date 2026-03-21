@@ -29,6 +29,7 @@ describe("supabaseBusinessProvider.costumerLookup", () => {
 
 // Test: order_create
 import { orderCreateTool } from "@/features/ai/tools/defs/order_create";
+import { jobCreateTool } from "@/features/ai/tools/defs/job_create";
 
 describe("order_create integration", () => {
   it("creates an order and order items for an existing customer", async () => {
@@ -91,5 +92,66 @@ describe("order_create integration", () => {
 
     expect(result.code).toBe("FOLLOW_UP_REQUIRED");
     expect(result.message).toBeTruthy();
+  });
+});
+
+describe("job_create integration", () => {
+  it("creates a job and creates customer if missing", async () => {
+    const ctx = {
+      locale: "de-DE",
+      timezone: "Europe/Berlin",
+    } as any;
+
+    const suffix = Date.now();
+    const result = await jobCreateTool.execute(
+      {
+        customerName: `Musterfirma ${suffix}`,
+        street: "Teststraße 10",
+        city: "Berlin",
+        postalCode: "10115",
+        note: "Integrationstest job_create",
+      },
+      ctx,
+      true,
+    );
+
+    expect(result.ok).toBe(true);
+
+    if (!result.ok) {
+      throw new Error(`Expected success, got: ${result.message}`);
+    }
+
+    expect(result.customer.id).toBeTruthy();
+    expect(result.job.id).toBeTruthy();
+    expect(result.job.job_number).toBeTruthy();
+    expect(result.job.status).toBe("new");
+    expect(typeof result.customerCreated).toBe("boolean");
+    expect(Array.isArray(result.missingFields)).toBe(true);
+  });
+
+  it("creates a quick job with only customerName", async () => {
+    const ctx = {
+      locale: "de-DE",
+      timezone: "Europe/Berlin",
+    } as any;
+
+    const suffix = Date.now();
+    const result = await jobCreateTool.execute(
+      {
+        customerName: `Quickkunde ${suffix}`,
+      },
+      ctx,
+      true,
+    );
+
+    expect(result.ok).toBe(true);
+
+    if (!result.ok) {
+      throw new Error(`Expected success, got: ${result.message}`);
+    }
+
+    expect(result.customer.id).toBeTruthy();
+    expect(result.job.id).toBeTruthy();
+    expect(result.missingFields.length).toBeGreaterThan(0);
   });
 });
