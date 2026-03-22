@@ -2,6 +2,8 @@ import { getSupabaseServer } from "@/services/supabase/server";
 import {
   BusinessCustomer,
   BusinessProvider,
+  CustomerCreateArgs,
+  CustomerCreateResult,
   CustomerLookupArgs,
   CustomerLookupResult,
   Job,
@@ -44,6 +46,10 @@ function mapCustomer(row: CustomerRow): BusinessCustomer {
 
 function normalize(value?: string | null): string {
   return (value ?? "").trim().toLowerCase();
+}
+
+function normalizePhone(value?: string | null): string {
+  return (value ?? "").replace(/\D/g, "");
 }
 
 function generateUniqueNumber(prefix: string): string {
@@ -98,6 +104,112 @@ export const supabaseBusinessProvider: BusinessProvider = {
     return {
       ok: true,
       customers: (data ?? []).map(mapCustomer),
+    };
+  },
+
+  async customerCreate(
+    args: CustomerCreateArgs,
+    debug: boolean = false,
+  ): Promise<CustomerCreateResult> {
+    const supabase = getSupabaseServer();
+
+    const customerName = args.customerName?.trim() ?? "";
+    const phone = args.phone?.trim() ?? "";
+    const contactName = args.contactName?.trim() || null;
+    const email = args.email?.trim() || null;
+    const street = args.street?.trim() || null;
+    const city = args.city?.trim() || null;
+    const postalCode = args.postalCode?.trim() || null;
+    const note = args.note?.trim() || null;
+
+    if (!customerName || !phone) {
+      return {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message:
+          "Für einen neuen Kunden brauche ich mindestens Name und Telefonnummer.",
+      };
+    }
+
+    const missingFields: string[] = [];
+    if (!contactName) missingFields.push("contactName");
+    if (!email) missingFields.push("email");
+    if (!street) missingFields.push("street");
+    if (!city) missingFields.push("city");
+    if (!postalCode) missingFields.push("postalCode");
+    if (!note) missingFields.push("note");
+
+    const normalizedPhone = normalizePhone(phone);
+    if (normalizedPhone.length > 0) {
+      const { data: matchingByPhone, error: phoneLookupError } = await supabase
+        .from("customers")
+        .select("*")
+        .ilike("phone", `%${phone}%`)
+        .limit(10);
+
+      if (debug) {
+        console.log("Customer Create Phone Lookup:", matchingByPhone);
+        console.log("Customer Create Phone Lookup Error:", phoneLookupError);
+      }
+
+      if (phoneLookupError) {
+        return {
+          ok: false,
+          code: "CUSTOMER_LOOKUP_FAILED",
+          message: phoneLookupError.message,
+        };
+      }
+
+      const existingCustomer = (matchingByPhone ?? []).find(
+        (candidate) => normalizePhone(candidate.phone) === normalizedPhone,
+      );
+
+      if (existingCustomer) {
+        return {
+          ok: true,
+          message: `Kunde ${existingCustomer.customer_number} existiert bereits.`,
+          customer: mapCustomer(existingCustomer as CustomerRow),
+          customerCreated: false,
+          missingFields,
+        };
+      }
+    }
+
+    const { data: createdCustomer, error: createCustomerError } = await supabase
+      .from("customers")
+      .insert({
+        customer_number: generateUniqueNumber("C"),
+        company_name: customerName,
+        contact_name: contactName ?? customerName,
+        phone,
+        email,
+        street,
+        city,
+        postal_code: postalCode,
+        notes: note,
+      })
+      .select("*")
+      .single();
+
+    if (debug) {
+      console.log("Customer Create Result:", createdCustomer);
+      console.log("Customer Create Error:", createCustomerError);
+    }
+
+    if (createCustomerError || !createdCustomer) {
+      return {
+        ok: false,
+        code: "CUSTOMER_CREATE_FAILED",
+        message: createCustomerError?.message ?? "Kunde konnte nicht angelegt werden.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: `Kunde ${createdCustomer.customer_number} wurde angelegt.`,
+      customer: mapCustomer(createdCustomer as CustomerRow),
+      customerCreated: true,
+      missingFields,
     };
   },
 

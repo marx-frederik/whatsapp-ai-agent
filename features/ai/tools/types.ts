@@ -29,11 +29,13 @@ export type ToolCallMissing<T extends ToolCallUnion = ToolCallUnion> =
       }
     : never;
 
+import { customerCreateTool } from "./defs/customer_create";
 import { customerLookupTool } from "./defs/customer_lookup";
 import { jobCreateTool } from "./defs/job_create";
 import { orderCreateTool } from "./defs/order_create";
 
 export const ToolRegistry = [
+  customerCreateTool,
   orderCreateTool,
   customerLookupTool,
   jobCreateTool,

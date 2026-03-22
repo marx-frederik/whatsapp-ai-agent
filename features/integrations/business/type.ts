@@ -1,3 +1,4 @@
+import { CustomerCreateSchema } from "@/features/ai/tools/defs/customer_create";
 import { CustomerLookupSchema } from "@/features/ai/tools/defs/customer_lookup";
 import { OrderCreateSchema } from "@/features/ai/tools/defs/order_create";
 import z from "zod";
@@ -27,6 +28,26 @@ export type CustomerLookupResult =
       ok: false;
       code: "CUSTOMER_LOOKUP_FAILED";
       message: string;
+    };
+
+export type CustomerCreateArgs = z.infer<typeof CustomerCreateSchema>;
+
+export type CustomerCreateResult =
+  | {
+      ok: true;
+      message: string;
+      customer: BusinessCustomer;
+      customerCreated: boolean;
+      missingFields: string[];
+    }
+  | {
+      ok: false;
+      code:
+        | "FOLLOW_UP_REQUIRED"
+        | "CUSTOMER_LOOKUP_FAILED"
+        | "CUSTOMER_CREATE_FAILED";
+      message: string;
+      options?: string[];
     };
 
 export type Order = {
@@ -111,6 +132,10 @@ export type JobCreateResult =
 
 export interface BusinessProvider {
   customerLookup(args: CustomerLookupArgs): Promise<CustomerLookupResult>;
+  customerCreate(
+    args: CustomerCreateArgs,
+    debug: boolean,
+  ): Promise<CustomerCreateResult>;
   orderCreate(
     args: OrderCreateArgs,
     debug: boolean,
