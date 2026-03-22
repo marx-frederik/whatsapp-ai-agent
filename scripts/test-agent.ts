@@ -19,12 +19,16 @@ async function run(text: string) {
     replyToken: { twilioFrom: "1234" },
   };
 
-  const result = await brainAgent.process(msg);
+  const result = await brainAgent.process({
+    chatId: msg.from,
+    text: msg.text ?? "",
+    debug: true,
+  });
 
   console.log("\n====================");
   console.log("INPUT:", text);
   console.log("--------------------");
-  console.dir(result.replyText, { depth: null });
+  console.dir(result.finalOutput, { depth: null });
 }
 
 async function main() {
