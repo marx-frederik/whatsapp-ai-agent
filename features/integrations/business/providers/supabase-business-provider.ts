@@ -12,6 +12,8 @@ import {
   JobDispatchResult,
   JobCreateArgs,
   JobCreateResult,
+  NoteCreateArgs,
+  NoteCreateResult,
   Order,
   OrderCreateArgs,
   OrderCreateResult,
@@ -109,16 +111,41 @@ type ResolveSuccess<T> = {
   value: T;
 };
 
-type ResolveFailure = {
+type ResolveFailure<TFailureResult> = {
   ok: false;
-  result: JobDispatchResult;
+  result: TFailureResult;
 };
 
-type ResolveResult<T> = ResolveSuccess<T> | ResolveFailure;
+type ResolveResult<T, TFailureResult> =
+  | ResolveSuccess<T>
+  | ResolveFailure<TFailureResult>;
+
+type EmployeeResolveFailure = {
+  ok: false;
+  code: "FOLLOW_UP_REQUIRED" | "EMPLOYEE_LOOKUP_FAILED";
+  message: string;
+  options?: string[];
+};
+
+type JobReferenceFailure = {
+  ok: false;
+  code: "FOLLOW_UP_REQUIRED" | "JOB_LOOKUP_FAILED";
+  message: string;
+  options?: string[];
+};
 
 type ResolvedCustomerScope = {
   customerIds: string[] | null;
   customerLabelsById: Map<string, string>;
+};
+
+type JobReferenceCriteria = {
+  jobNumber: string | null;
+  customerIdentifier: string | null;
+  jobDate: string | null;
+  street: string | null;
+  houseNumber: string | null;
+  hasAddressCriteria: boolean;
 };
 
 function normalizeSearchText(value?: string | null): string {
@@ -168,6 +195,70 @@ function matchesStructuredAddress(
   }
 
   return true;
+}
+
+function extractJobReferenceCriteria(args: {
+  jobNumber?: string | null;
+  customerIdentifier?: string | null;
+  customerName?: string | null;
+  companyName?: string | null;
+  jobDate?: string | null;
+  street?: string | null;
+  houseNumber?: string | null;
+}): JobReferenceCriteria {
+  const jobNumber = args.jobNumber?.trim() || null;
+  const customerIdentifier =
+    (args.customerIdentifier ?? args.customerName ?? args.companyName)?.trim() ||
+    null;
+  const jobDate = args.jobDate?.trim() || null;
+  const street = args.street?.trim() || null;
+  const houseNumber = args.houseNumber?.trim() || null;
+
+  return {
+    jobNumber,
+    customerIdentifier,
+    jobDate,
+    street,
+    houseNumber,
+    hasAddressCriteria: Boolean(street),
+  };
+}
+
+function validateJobReferenceCriteria(
+  criteria: JobReferenceCriteria,
+): JobReferenceFailure | null {
+  if (!criteria.jobNumber && criteria.houseNumber && !criteria.street) {
+    return {
+      ok: false,
+      code: "FOLLOW_UP_REQUIRED",
+      message:
+        "Die Hausnummer allein reicht nicht. Bitte nenne auch die Strasse oder die Auftragsnummer.",
+    };
+  }
+
+  if (!criteria.jobNumber) {
+    const criteriaCount = [
+      criteria.customerIdentifier,
+      criteria.jobDate,
+      criteria.hasAddressCriteria ? "street" : null,
+    ].filter(Boolean).length;
+
+    if (criteriaCount < 1) {
+      return {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message:
+          "Ohne Auftragsnummer brauche ich mindestens ein Kriterium wie Kunde, Strasse oder Datum.",
+      };
+    }
+  }
+
+  return null;
+}
+
+function buildTimestampedNote(noteText: string): string {
+  const timestamp = new Date().toISOString().replace("T", " ").slice(0, 16);
+  return `[${timestamp}] ${noteText.trim()}`;
 }
 
 function buildCustomerLabel(customer: {
@@ -257,7 +348,7 @@ async function resolveEmployee(
   supabase: ReturnType<typeof getSupabaseServer>,
   employeeName: string,
   debug: boolean,
-): Promise<ResolveResult<EmployeeRow>> {
+): Promise<ResolveResult<EmployeeRow, EmployeeResolveFailure>> {
   const normalizedEmployeeName = normalizeLoose(employeeName);
   const { data: employeeCandidates, error: employeeLookupError } = await supabase
     .from("employees")
@@ -366,7 +457,7 @@ async function resolveCustomerScope(
     jobDate: string | null;
   },
   debug: boolean,
-): Promise<ResolveResult<ResolvedCustomerScope>> {
+): Promise<ResolveResult<ResolvedCustomerScope, JobReferenceFailure>> {
   if (!customerIdentifier) {
     return {
       ok: true,
@@ -494,7 +585,7 @@ async function resolveJob(
     customerLabelsById: Map<string, string>;
   },
   debug: boolean,
-): Promise<ResolveResult<Job>> {
+): Promise<ResolveResult<Job, JobReferenceFailure>> {
   let jobQuery = supabase.from("jobs").select("*");
 
   if (criteria.jobNumber) {
@@ -608,6 +699,47 @@ async function resolveJob(
       ),
     },
   };
+}
+
+async function resolveJobReference(
+  supabase: ReturnType<typeof getSupabaseServer>,
+  criteria: JobReferenceCriteria,
+  debug: boolean,
+): Promise<ResolveResult<Job, JobReferenceFailure>> {
+  const validationFailure = validateJobReferenceCriteria(criteria);
+  if (validationFailure) {
+    return {
+      ok: false,
+      result: validationFailure,
+    };
+  }
+
+  const customerScopeResolution = await resolveCustomerScope(
+    supabase,
+    criteria.customerIdentifier,
+    {
+      hasAddressCriteria: criteria.hasAddressCriteria,
+      jobNumber: criteria.jobNumber,
+      jobDate: criteria.jobDate,
+    },
+    debug,
+  );
+  if (!customerScopeResolution.ok) {
+    return customerScopeResolution;
+  }
+
+  return await resolveJob(
+    supabase,
+    {
+      jobNumber: criteria.jobNumber,
+      customerIds: customerScopeResolution.value.customerIds,
+      jobDate: criteria.jobDate,
+      street: criteria.street,
+      houseNumber: criteria.houseNumber,
+      customerLabelsById: customerScopeResolution.value.customerLabelsById,
+    },
+    debug,
+  );
 }
 
 export const supabaseBusinessProvider: BusinessProvider = {
@@ -1048,14 +1180,7 @@ export const supabaseBusinessProvider: BusinessProvider = {
     const supabase = getSupabaseServer();
 
     const employeeName = args.employeeName?.trim() ?? "";
-    const jobNumber = args.jobNumber?.trim() || null;
-    const customerIdentifier =
-      (args.customerIdentifier ?? args.customerName ?? args.companyName)?.trim() ||
-      null;
-    const jobDate = args.jobDate?.trim() || null;
-    const street = args.street?.trim() || null;
-    const houseNumber = args.houseNumber?.trim() || null;
-    const hasAddressCriteria = Boolean(street);
+    const jobReferenceCriteria = extractJobReferenceCriteria(args);
 
     if (!employeeName) {
       return {
@@ -1065,40 +1190,10 @@ export const supabaseBusinessProvider: BusinessProvider = {
       };
     }
 
-    if (!jobNumber && houseNumber && !street) {
-      return {
-        ok: false,
-        code: "FOLLOW_UP_REQUIRED",
-        message:
-          "Die Hausnummer allein reicht nicht. Bitte nenne auch die Strasse oder die Auftragsnummer.",
-      };
-    }
-
-    if (!jobNumber) {
-      const criteriaCount = [
-        customerIdentifier,
-        jobDate,
-        hasAddressCriteria ? "street" : null,
-      ].filter(Boolean).length;
-
-      if (criteriaCount < 1) {
-        return {
-          ok: false,
-          code: "FOLLOW_UP_REQUIRED",
-          message:
-            "Ohne Auftragsnummer brauche ich mindestens ein Kriterium wie Kunde, Strasse oder Datum.",
-        };
-      }
-    }
-
     if (debug) {
       console.log("Dispatch Criteria:", {
         employeeName,
-        jobNumber,
-        customerIdentifier,
-        jobDate,
-        street,
-        houseNumber,
+        ...jobReferenceCriteria,
       });
     }
 
@@ -1107,30 +1202,9 @@ export const supabaseBusinessProvider: BusinessProvider = {
       return employeeResolution.result;
     }
 
-    const customerScopeResolution = await resolveCustomerScope(
+    const jobResolution = await resolveJobReference(
       supabase,
-      customerIdentifier,
-      {
-        hasAddressCriteria,
-        jobNumber,
-        jobDate,
-      },
-      debug,
-    );
-    if (!customerScopeResolution.ok) {
-      return customerScopeResolution.result;
-    }
-
-    const jobResolution = await resolveJob(
-      supabase,
-      {
-        jobNumber,
-        customerIds: customerScopeResolution.value.customerIds,
-        jobDate,
-        street,
-        houseNumber,
-        customerLabelsById: customerScopeResolution.value.customerLabelsById,
-      },
+      jobReferenceCriteria,
       debug,
     );
     if (!jobResolution.ok) {
@@ -1178,7 +1252,74 @@ export const supabaseBusinessProvider: BusinessProvider = {
       job: dispatchedJob as Job,
       employee: mapEmployee(resolvedEmployee),
     };
+  },
 
+  async noteCreate(
+    args: NoteCreateArgs,
+    debug: boolean = false,
+  ): Promise<NoteCreateResult> {
+    const supabase = getSupabaseServer();
+    const noteText = args.noteText.trim();
+    const jobReferenceCriteria = extractJobReferenceCriteria(args);
+
+    if (!noteText) {
+      return {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message: "Bitte nenne den Text der Notiz.",
+      };
+    }
+
+    if (debug) {
+      console.log("Note Create Criteria:", {
+        noteText,
+        ...jobReferenceCriteria,
+      });
+    }
+
+    const jobResolution = await resolveJobReference(
+      supabase,
+      jobReferenceCriteria,
+      debug,
+    );
+    if (!jobResolution.ok) {
+      return jobResolution.result;
+    }
+
+    const resolvedJob = jobResolution.value;
+    const appendedNote = buildTimestampedNote(noteText);
+    const notes = resolvedJob.notes?.trim()
+      ? `${resolvedJob.notes.trim()}\n${appendedNote}`
+      : appendedNote;
+
+    const { data: updatedJob, error: updateError } = await supabase
+      .from("jobs")
+      .update({
+        notes,
+      })
+      .eq("id", resolvedJob.id)
+      .select("*")
+      .single();
+
+    if (debug) {
+      console.log("Note Create Updated Job:", updatedJob);
+      console.log("Note Create Updated Job Error:", updateError);
+    }
+
+    if (updateError || !updatedJob) {
+      return {
+        ok: false,
+        code: "NOTE_CREATE_FAILED",
+        message: updateError?.message ?? "Notiz konnte nicht gespeichert werden.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: `Die Notiz wurde zu Auftrag ${updatedJob.job_number} hinzugefuegt.`,
+      job: updatedJob as Job,
+      appendedNote,
+    };
   },
 };
 

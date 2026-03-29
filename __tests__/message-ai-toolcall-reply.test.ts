@@ -521,6 +521,77 @@ describe("AI integration: job_dispatch (skipped by default)", () => {
   }, 60000);
 });
 
+describe("AI integration: note_create (skipped by default)", () => {
+  it.skip("adds a note to a clearly identified job", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const ids: TestRecordIds = {
+      employeeIds: [],
+      customerIds: [],
+      jobIds: [],
+    };
+
+    const customerName = "Parklicht Service GmbH";
+    const street = "Mohnallee 8";
+    const noteText = "Zugang nur ueber den Hof.";
+
+    try {
+      const { data: customer } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-AI-${suffix}`,
+          company_name: customerName,
+          contact_name: customerName,
+        })
+        .select("*")
+        .single();
+      if (!customer) throw new Error("Customer setup failed");
+      ids.customerIds.push(customer.id);
+
+      const { data: job } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-AI-${suffix}`,
+          customer_id: customer.id,
+          status: "new",
+          address: `${street}, Koeln`,
+          notes: "Bestehende Notiz",
+        })
+        .select("*")
+        .single();
+      if (!job) throw new Error("Job setup failed");
+      ids.jobIds.push(job.id);
+
+      const prompt = `Fuege dem Auftrag in der ${street} fuer Kunde ${customerName} die Notiz hinzu: ${noteText}`;
+
+      const result = await brainAgent.process({
+        chatId: `ai-note-test-${suffix}`,
+        text: prompt,
+        brainContext: {
+          locale: "de-DE",
+          timezone: "Europe/Berlin",
+        },
+        debug: true,
+      });
+
+      expect(result.toolNames ?? []).toContain("note_create");
+      expect(result.finalOutput).toMatch(/notiz|hinzugefuegt|auftrag/i);
+
+      const { data: updatedJob } = await supabase
+        .from("jobs")
+        .select("*")
+        .eq("id", job.id)
+        .single();
+      if (!updatedJob) throw new Error("Could not reload updated job");
+
+      expect(updatedJob.notes).toContain("Bestehende Notiz");
+      expect(updatedJob.notes).toContain(noteText);
+    } finally {
+      await cleanupTestRecords(ids);
+    }
+  }, 60000);
+});
+
 describe("AI integration: existing legacy scenarios (kept skipped)", () => {
   it.skip("processes an inbound message, executes customer lookup and returns a customer reply", async () => {
     const msg: NormalizedMessage = {
