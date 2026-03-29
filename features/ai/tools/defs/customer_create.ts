@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "../defineTool";
 import { getBusinessProvider } from "@/features/integrations/business/get-business-provider";
-import { CustomerCreateArgs } from "@/features/integrations/business/type";
+import type { CustomerCreateArgs } from "@/features/integrations/business/type";
 
 export const CustomerCreateSchema = z
   .object({
