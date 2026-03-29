@@ -51,6 +51,39 @@ export type Database = {
         };
         Relationships: [];
       };
+      employees: {
+        Row: {
+          id: string;
+          employee_number: string;
+          full_name: string;
+          role: string;
+          phone: string | null;
+          email: string | null;
+          active: boolean;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          employee_number: string;
+          full_name: string;
+          role: string;
+          phone?: string | null;
+          email?: string | null;
+          active?: boolean;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          employee_number?: string;
+          full_name?: string;
+          role?: string;
+          phone?: string | null;
+          email?: string | null;
+          active?: boolean;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
       jobs: {
         Row: {
           id: string;

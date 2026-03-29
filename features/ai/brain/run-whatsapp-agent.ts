@@ -35,10 +35,6 @@ export async function runWhatsappAgent(
       { previousResponseId: input.previousResponseId },
     );
 
-    if(debug){
-      console.log("Runner Result:", result)
-    }
-
     const toolNames: ToolName[] =
       result.newItems
         ?.filter((item) => item.type === "tool_call_item")
@@ -49,6 +45,24 @@ export async function runWhatsappAgent(
           }
           return toolName;
         }) ?? [];
+
+    if (debug) {
+      const toolCalls =
+        result.newItems
+          ?.filter((item) => item.type === "tool_call_item")
+          .map((item) => ({
+            name: item.rawItem.name,
+            arguments: item.rawItem.arguments ?? null,
+          })) ?? [];
+
+      console.log("Agent Tool Calls:", JSON.stringify(toolCalls, null, 2));
+      console.log(
+        "Agent Final Output:",
+        typeof result.finalOutput === "string"
+          ? result.finalOutput
+          : JSON.stringify(result.finalOutput),
+      );
+    }
 
     return {
       outputText:

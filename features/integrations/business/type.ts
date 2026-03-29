@@ -1,4 +1,5 @@
 import { CustomerCreateSchema } from "@/features/ai/tools/defs/customer_create";
+import { JobDispatchSchema } from "@/features/ai/tools/defs/job_dispatch";
 import { CustomerLookupSchema } from "@/features/ai/tools/defs/customer_lookup";
 import { OrderCreateSchema } from "@/features/ai/tools/defs/order_create";
 import z from "zod";
@@ -100,6 +101,17 @@ export type Job = {
   created_at: string;
 };
 
+export type BusinessEmployee = {
+  id: string;
+  employeeNumber: string;
+  fullName: string;
+  role: string;
+  phone: string | null;
+  email: string | null;
+  active: boolean;
+  createdAt: string;
+};
+
 export type JobCreateArgs = {
   customerName: string;
   street?: string | null;
@@ -130,6 +142,26 @@ export type JobCreateResult =
       options?: string[];
     };
 
+export type JobDispatchArgs = z.infer<typeof JobDispatchSchema>;
+
+export type JobDispatchResult =
+  | {
+      ok: true;
+      message: string;
+      job: Job;
+      employee: BusinessEmployee;
+    }
+  | {
+      ok: false;
+      code:
+        | "FOLLOW_UP_REQUIRED"
+        | "EMPLOYEE_LOOKUP_FAILED"
+        | "JOB_LOOKUP_FAILED"
+        | "JOB_DISPATCH_FAILED";
+      message: string;
+      options?: string[];
+    };
+
 export interface BusinessProvider {
   customerLookup(args: CustomerLookupArgs): Promise<CustomerLookupResult>;
   customerCreate(
@@ -141,4 +173,8 @@ export interface BusinessProvider {
     debug: boolean,
   ): Promise<OrderCreateResult>;
   jobCreate(args: JobCreateArgs, debug: boolean): Promise<JobCreateResult>;
+  jobDispatch(
+    args: JobDispatchArgs,
+    debug: boolean,
+  ): Promise<JobDispatchResult>;
 }

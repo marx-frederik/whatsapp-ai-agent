@@ -1,18 +1,53 @@
 // @vitest-environment node
 import dotenv from "dotenv";
 import { describe, expect, it } from "vitest";
+import { orderCreateTool } from "@/features/ai/tools/defs/order_create";
+import { jobCreateTool } from "@/features/ai/tools/defs/job_create";
+import {
+  JobDispatchSchema,
+  jobDispatchTool,
+} from "@/features/ai/tools/defs/job_dispatch";
+import { getSupabaseServer } from "@/services/supabase/server";
 
 dotenv.config({ path: ".env.local", override: true });
 
-// test: customer_lookup
+const testCtx = {
+  locale: "de-DE",
+  timezone: "Europe/Berlin",
+} as const;
+
+async function cleanupOrder(orderId: string | null): Promise<void> {
+  if (!orderId) {
+    return;
+  }
+
+  const supabase = getSupabaseServer();
+  await supabase.from("order_items").delete().eq("order_id", orderId);
+  await supabase.from("orders").delete().eq("id", orderId);
+}
+
+async function cleanupJobAndCustomer(
+  jobId: string | null,
+  customerId: string | null,
+  customerCreated: boolean,
+): Promise<void> {
+  const supabase = getSupabaseServer();
+
+  if (jobId) {
+    await supabase.from("jobs").delete().eq("id", jobId);
+  }
+
+  if (customerCreated && customerId) {
+    await supabase.from("customers").delete().eq("id", customerId);
+  }
+}
 
 describe("supabaseBusinessProvider.costumerLookup", () => {
   it("finds customer by identifier", async () => {
-    const { supabaseBusinessProvider } =
-      await import("./supabase-business-provider");
+    const { supabaseBusinessProvider } = await import("./supabase-business-provider");
 
     const result = await supabaseBusinessProvider.customerLookup({
-      customerIdentifier: "Müller",
+      customerIdentifier: "MÃ¼ller",
     });
 
     expect(result.ok).toBe(true);
@@ -27,50 +62,43 @@ describe("supabaseBusinessProvider.costumerLookup", () => {
   });
 });
 
-// Test: order_create
-import { orderCreateTool } from "@/features/ai/tools/defs/order_create";
-import { jobCreateTool } from "@/features/ai/tools/defs/job_create";
-
 describe("order_create integration", () => {
   it("creates an order and order items for an existing customer", async () => {
-    const ctx = {
-      locale: "de-DE",
-      timezone: "Europe/Berlin",
-    } as any;
+    let createdOrderId: string | null = null;
 
-    const args = {
-      customerIdentifier: "Müller",
-      items: [
+    try {
+      const result = await orderCreateTool.execute(
         {
-          skuOrName: "Steine",
-          quantity: 100,
+          customerIdentifier: "MÃ¼ller",
+          items: [
+            {
+              skuOrName: "Steine",
+              quantity: 100,
+            },
+          ],
+          note: "Integrationstest",
         },
-      ],
-      note: "Integrationstest",
-    };
+        testCtx as any,
+        true,
+      );
 
-    const result = await orderCreateTool.execute(args, ctx, true);
+      expect(result.ok).toBe(true);
 
-    console.log(result);
+      if (!result.ok) {
+        throw new Error(`Expected success, got: ${result.message}`);
+      }
 
-    expect(result.ok).toBe(true);
-
-    if (!result.ok) {
-      throw new Error(`Expected success, got: ${result.message}`);
+      createdOrderId = result.order.id;
+      expect(result.order.id).toBeTruthy();
+      expect(result.order.order_number).toBeTruthy();
+      expect(result.order.customer_id).toBeTruthy();
+      expect(result.order.status).toBe("draft");
+    } finally {
+      await cleanupOrder(createdOrderId);
     }
-
-    expect(result.order.id).toBeTruthy();
-    expect(result.order.order_number).toBeTruthy();
-    expect(result.order.customer_id).toBeTruthy();
-    expect(result.order.status).toBe("draft");
   });
 
   it("returns follow-up when customer is not found", async () => {
-    const ctx = {
-      locale: "de-DE",
-      timezone: "Europe/Berlin",
-    } as any;
-
     const result = await orderCreateTool.execute(
       {
         customerIdentifier: "UNBEKANNT_123456",
@@ -81,7 +109,8 @@ describe("order_create integration", () => {
           },
         ],
       },
-      ctx,true
+      testCtx as any,
+      true,
     );
 
     expect(result.ok).toBe(false);
@@ -97,61 +126,640 @@ describe("order_create integration", () => {
 
 describe("job_create integration", () => {
   it("creates a job and creates customer if missing", async () => {
-    const ctx = {
-      locale: "de-DE",
-      timezone: "Europe/Berlin",
-    } as any;
-
     const suffix = Date.now();
-    const result = await jobCreateTool.execute(
-      {
-        customerName: `Musterfirma ${suffix}`,
-        street: "Teststraße 10",
-        city: "Berlin",
-        postalCode: "10115",
-        note: "Integrationstest job_create",
-      },
-      ctx,
-      true,
-    );
+    let createdJobId: string | null = null;
+    let createdCustomerId: string | null = null;
+    let customerWasCreated = false;
 
-    expect(result.ok).toBe(true);
+    try {
+      const result = await jobCreateTool.execute(
+        {
+          customerName: `Musterfirma ${suffix}`,
+          street: "TeststraÃŸe 10",
+          city: "Berlin",
+          postalCode: "10115",
+          note: "Integrationstest job_create",
+        },
+        testCtx as any,
+        true,
+      );
 
-    if (!result.ok) {
-      throw new Error(`Expected success, got: ${result.message}`);
+      expect(result.ok).toBe(true);
+
+      if (!result.ok) {
+        throw new Error(`Expected success, got: ${result.message}`);
+      }
+
+      createdJobId = result.job.id;
+      createdCustomerId = result.customer.id;
+      customerWasCreated = result.customerCreated;
+
+      expect(result.customer.id).toBeTruthy();
+      expect(result.job.id).toBeTruthy();
+      expect(result.job.job_number).toBeTruthy();
+      expect(result.job.status).toBe("new");
+      expect(typeof result.customerCreated).toBe("boolean");
+      expect(Array.isArray(result.missingFields)).toBe(true);
+    } finally {
+      await cleanupJobAndCustomer(
+        createdJobId,
+        createdCustomerId,
+        customerWasCreated,
+      );
     }
-
-    expect(result.customer.id).toBeTruthy();
-    expect(result.job.id).toBeTruthy();
-    expect(result.job.job_number).toBeTruthy();
-    expect(result.job.status).toBe("new");
-    expect(typeof result.customerCreated).toBe("boolean");
-    expect(Array.isArray(result.missingFields)).toBe(true);
   });
 
   it("creates a quick job with only customerName", async () => {
-    const ctx = {
-      locale: "de-DE",
-      timezone: "Europe/Berlin",
-    } as any;
-
     const suffix = Date.now();
-    const result = await jobCreateTool.execute(
-      {
-        customerName: `Quickkunde ${suffix}`,
-      },
-      ctx,
-      true,
-    );
+    let createdJobId: string | null = null;
+    let createdCustomerId: string | null = null;
+    let customerWasCreated = false;
 
-    expect(result.ok).toBe(true);
+    try {
+      const result = await jobCreateTool.execute(
+        {
+          customerName: `Quickkunde ${suffix}`,
+        },
+        testCtx as any,
+        true,
+      );
 
-    if (!result.ok) {
-      throw new Error(`Expected success, got: ${result.message}`);
+      expect(result.ok).toBe(true);
+
+      if (!result.ok) {
+        throw new Error(`Expected success, got: ${result.message}`);
+      }
+
+      createdJobId = result.job.id;
+      createdCustomerId = result.customer.id;
+      customerWasCreated = result.customerCreated;
+
+      expect(result.customer.id).toBeTruthy();
+      expect(result.job.id).toBeTruthy();
+      expect(result.missingFields.length).toBeGreaterThan(0);
+    } finally {
+      await cleanupJobAndCustomer(
+        createdJobId,
+        createdCustomerId,
+        customerWasCreated,
+      );
     }
+  });
+});
 
-    expect(result.customer.id).toBeTruthy();
-    expect(result.job.id).toBeTruthy();
-    expect(result.missingFields.length).toBeGreaterThan(0);
+describe("job_dispatch integration", () => {
+  it("assigns an employee via employee + customer + address and keeps unrelated jobs untouched", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const employeeName = `Tilda Brandner ${suffix}`;
+    const customerName = `Nordstern Ausbau GmbH ${suffix}`;
+    const otherCustomerName = `Leitwerk Service GmbH ${suffix}`;
+    const streetName = `Morgensternpfad ${suffix}`;
+    const houseNumber = "7";
+
+    let employeeId: string | null = null;
+    let customerId: string | null = null;
+    let otherCustomerId: string | null = null;
+    let jobId: string | null = null;
+    let otherJobId: string | null = null;
+
+    try {
+      const { data: employee, error: employeeError } = await supabase
+        .from("employees")
+        .insert({
+          employee_number: `E-IT-${suffix}`,
+          full_name: employeeName,
+          role: "Dispo",
+          active: true,
+        })
+        .select("*")
+        .single();
+
+      if (employeeError || !employee) {
+        throw new Error(employeeError?.message ?? "Employee setup failed");
+      }
+      employeeId = employee.id;
+
+      const { data: customer, error: customerError } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-IT-${suffix}`,
+          company_name: customerName,
+          contact_name: customerName,
+        })
+        .select("*")
+        .single();
+
+      if (customerError || !customer) {
+        throw new Error(customerError?.message ?? "Customer setup failed");
+      }
+      customerId = customer.id;
+
+      const { data: otherCustomer, error: otherCustomerError } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-IT-${suffix}-ALT`,
+          company_name: otherCustomerName,
+          contact_name: otherCustomerName,
+        })
+        .select("*")
+        .single();
+
+      if (otherCustomerError || !otherCustomer) {
+        throw new Error(otherCustomerError?.message ?? "Other customer setup failed");
+      }
+      otherCustomerId = otherCustomer.id;
+
+      const { data: createdJob, error: jobError } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-IT-${suffix}`,
+          customer_id: customer.id,
+          status: "new",
+          address: `${streetName} ${houseNumber}, Koeln`,
+          notes: "Integrationstest job_dispatch",
+        })
+        .select("*")
+        .single();
+
+      if (jobError || !createdJob) {
+        throw new Error(jobError?.message ?? "Job setup failed");
+      }
+      jobId = createdJob.id;
+
+      const { data: otherJob, error: otherJobError } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-IT-${suffix}-ALT`,
+          customer_id: otherCustomer.id,
+          status: "new",
+          address: `${streetName} ${houseNumber}, Koeln`,
+          notes: "Integrationstest job_dispatch anderer Kunde",
+        })
+        .select("*")
+        .single();
+
+      if (otherJobError || !otherJob) {
+        throw new Error(otherJobError?.message ?? "Other job setup failed");
+      }
+      otherJobId = otherJob.id;
+
+      const extractedArgs = JobDispatchSchema.parse({
+        employeeName,
+        companyName: customerName,
+        street: streetName,
+        houseNumber,
+      });
+
+      const result = await jobDispatchTool.execute(extractedArgs, testCtx as any, true);
+
+      expect(result.ok).toBe(true);
+
+      if (!result.ok) {
+        throw new Error(`Expected success, got: ${result.message}`);
+      }
+
+      expect(result.employee.id).toBe(employee.id);
+      expect(result.job.id).toBe(createdJob.id);
+      expect(result.job.assigned_employee_id).toBe(employee.id);
+      expect(result.job.status).toBe("scheduled");
+
+      const { data: untouchedOtherJob, error: untouchedOtherJobError } = await supabase
+        .from("jobs")
+        .select("*")
+        .eq("id", otherJob.id)
+        .single();
+
+      if (untouchedOtherJobError || !untouchedOtherJob) {
+        throw new Error(
+          untouchedOtherJobError?.message ?? "Could not reload unrelated job",
+        );
+      }
+
+      expect(untouchedOtherJob.assigned_employee_id).toBeNull();
+      expect(untouchedOtherJob.status).toBe("new");
+    } finally {
+      if (jobId) {
+        await supabase.from("jobs").delete().eq("id", jobId);
+      }
+      if (otherJobId) {
+        await supabase.from("jobs").delete().eq("id", otherJobId);
+      }
+      if (customerId) {
+        await supabase.from("customers").delete().eq("id", customerId);
+      }
+      if (otherCustomerId) {
+        await supabase.from("customers").delete().eq("id", otherCustomerId);
+      }
+      if (employeeId) {
+        await supabase.from("employees").delete().eq("id", employeeId);
+      }
+    }
+  }, 20000);
+
+  it("returns follow-up with concrete job options when multiple jobs match for one customer", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const employeeName = `Tilda Brandner ${suffix}`;
+    const customerName = `Nordstern Ausbau GmbH ${suffix}`;
+    const streetName = `Morgensternpfad ${suffix}`;
+    const houseNumber = "7";
+
+    let employeeId: string | null = null;
+    let customerId: string | null = null;
+    const jobIds: string[] = [];
+
+    try {
+      const { data: employee, error: employeeError } = await supabase
+        .from("employees")
+        .insert({
+          employee_number: `E-IT-${suffix}`,
+          full_name: employeeName,
+          role: "Dispo",
+          active: true,
+        })
+        .select("*")
+        .single();
+
+      if (employeeError || !employee) {
+        throw new Error(employeeError?.message ?? "Employee setup failed");
+      }
+      employeeId = employee.id;
+
+      const { data: customer, error: customerError } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-IT-${suffix}`,
+          company_name: customerName,
+          contact_name: customerName,
+        })
+        .select("*")
+        .single();
+
+      if (customerError || !customer) {
+        throw new Error(customerError?.message ?? "Customer setup failed");
+      }
+      customerId = customer.id;
+
+      const { data: jobOne, error: jobOneError } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-IT-${suffix}-1`,
+          customer_id: customer.id,
+          status: "new",
+          address: `${streetName} ${houseNumber} Nord, Koeln`,
+          notes: "Integrationstest job_dispatch multi",
+        })
+        .select("*")
+        .single();
+
+      if (jobOneError || !jobOne) {
+        throw new Error(jobOneError?.message ?? "Job setup failed");
+      }
+      jobIds.push(jobOne.id);
+
+      const { data: jobTwo, error: jobTwoError } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-IT-${suffix}-2`,
+          customer_id: customer.id,
+          status: "new",
+          address: `${streetName} ${houseNumber} Sued, Koeln`,
+          notes: "Integrationstest job_dispatch multi",
+        })
+        .select("*")
+        .single();
+
+      if (jobTwoError || !jobTwo) {
+        throw new Error(jobTwoError?.message ?? "Job setup failed");
+      }
+      jobIds.push(jobTwo.id);
+
+      const extractedArgs = JobDispatchSchema.parse({
+        employeeName,
+        companyName: customerName,
+        street: streetName,
+        houseNumber,
+      });
+
+      const result = await jobDispatchTool.execute(extractedArgs, testCtx as any, true);
+
+      expect(result.ok).toBe(false);
+
+      if (result.ok) {
+        throw new Error("Expected follow-up result");
+      }
+
+      expect(result.code).toBe("FOLLOW_UP_REQUIRED");
+      expect(result.message).toMatch(/mehrere|welchen|genau/i);
+      expect(result.options ?? []).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining(jobOne.job_number),
+          expect.stringContaining(jobTwo.job_number),
+        ]),
+      );
+
+      const { data: unchangedJobs, error: unchangedJobsError } = await supabase
+        .from("jobs")
+        .select("*")
+        .in("id", jobIds);
+
+      if (unchangedJobsError) {
+        throw new Error(unchangedJobsError.message);
+      }
+
+      expect(unchangedJobs ?? []).toHaveLength(2);
+      for (const job of unchangedJobs ?? []) {
+        expect(job.assigned_employee_id).toBeNull();
+        expect(job.status).toBe("new");
+      }
+    } finally {
+      if (jobIds.length > 0) {
+        await supabase.from("jobs").delete().in("id", jobIds);
+      }
+      if (customerId) {
+        await supabase.from("customers").delete().eq("id", customerId);
+      }
+      if (employeeId) {
+        await supabase.from("employees").delete().eq("id", employeeId);
+      }
+    }
+  });
+
+  it("returns labeled options when address matches jobs from multiple customers and no customer was provided", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const employeeName = `Selma Kirchner ${suffix}`;
+    const firstCustomerName = `Atlas Ausbau GmbH ${suffix}`;
+    const secondCustomerName = `Kiesel Werkservice GmbH ${suffix}`;
+    const streetName = `Hafenbogen ${suffix}`;
+    const houseNumber = "7";
+
+    let employeeId: string | null = null;
+    let firstCustomerId: string | null = null;
+    let secondCustomerId: string | null = null;
+    const jobIds: string[] = [];
+
+    try {
+      const { data: employee, error: employeeError } = await supabase
+        .from("employees")
+        .insert({
+          employee_number: `E-IT-${suffix}`,
+          full_name: employeeName,
+          role: "Dispo",
+          active: true,
+        })
+        .select("*")
+        .single();
+
+      if (employeeError || !employee) {
+        throw new Error(employeeError?.message ?? "Employee setup failed");
+      }
+      employeeId = employee.id;
+
+      const { data: firstCustomer, error: firstCustomerError } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-IT-${suffix}-A`,
+          company_name: firstCustomerName,
+          contact_name: firstCustomerName,
+        })
+        .select("*")
+        .single();
+
+      if (firstCustomerError || !firstCustomer) {
+        throw new Error(firstCustomerError?.message ?? "First customer setup failed");
+      }
+      firstCustomerId = firstCustomer.id;
+
+      const { data: secondCustomer, error: secondCustomerError } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-IT-${suffix}-B`,
+          company_name: secondCustomerName,
+          contact_name: secondCustomerName,
+        })
+        .select("*")
+        .single();
+
+      if (secondCustomerError || !secondCustomer) {
+        throw new Error(
+          secondCustomerError?.message ?? "Second customer setup failed",
+        );
+      }
+      secondCustomerId = secondCustomer.id;
+
+      const { data: firstJob, error: firstJobError } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-IT-${suffix}-A`,
+          customer_id: firstCustomer.id,
+          status: "new",
+          address: `${streetName} ${houseNumber}, Koeln`,
+          notes: "Integrationstest job_dispatch multi customer A",
+        })
+        .select("*")
+        .single();
+
+      if (firstJobError || !firstJob) {
+        throw new Error(firstJobError?.message ?? "First job setup failed");
+      }
+      jobIds.push(firstJob.id);
+
+      const { data: secondJob, error: secondJobError } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-IT-${suffix}-B`,
+          customer_id: secondCustomer.id,
+          status: "new",
+          address: `${streetName} ${houseNumber}, Koeln`,
+          notes: "Integrationstest job_dispatch multi customer B",
+        })
+        .select("*")
+        .single();
+
+      if (secondJobError || !secondJob) {
+        throw new Error(secondJobError?.message ?? "Second job setup failed");
+      }
+      jobIds.push(secondJob.id);
+
+      const extractedArgs = JobDispatchSchema.parse({
+        employeeName,
+        street: streetName,
+        houseNumber,
+      });
+
+      const result = await jobDispatchTool.execute(extractedArgs, testCtx as any, true);
+
+      expect(result.ok).toBe(false);
+
+      if (result.ok) {
+        throw new Error("Expected follow-up result");
+      }
+
+      expect(result.code).toBe("FOLLOW_UP_REQUIRED");
+      expect(result.message).toMatch(/mehrere|welchen|genau/i);
+      expect(result.options ?? []).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining(firstCustomerName),
+          expect.stringContaining(secondCustomerName),
+        ]),
+      );
+    } finally {
+      if (jobIds.length > 0) {
+        await supabase.from("jobs").delete().in("id", jobIds);
+      }
+      if (firstCustomerId) {
+        await supabase.from("customers").delete().eq("id", firstCustomerId);
+      }
+      if (secondCustomerId) {
+        await supabase.from("customers").delete().eq("id", secondCustomerId);
+      }
+      if (employeeId) {
+        await supabase.from("employees").delete().eq("id", employeeId);
+      }
+    }
+  });
+
+  it("resolves employee names via loose normalization for umlaut variants", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const storedEmployeeName = `J\u00fcrgen Falkner ${suffix}`;
+    const extractedEmployeeName = `Juergen Falkner ${suffix}`;
+    const customerName = `Morgenrot Ausbau GmbH ${suffix}`;
+    const streetName = `Seebogen ${suffix}`;
+    const houseNumber = "12";
+
+    let employeeId: string | null = null;
+    let customerId: string | null = null;
+    let jobId: string | null = null;
+
+    try {
+      const { data: employee, error: employeeError } = await supabase
+        .from("employees")
+        .insert({
+          employee_number: `E-IT-${suffix}`,
+          full_name: storedEmployeeName,
+          role: "Dispo",
+          active: true,
+        })
+        .select("*")
+        .single();
+
+      if (employeeError || !employee) {
+        throw new Error(employeeError?.message ?? "Employee setup failed");
+      }
+      employeeId = employee.id;
+
+      const { data: customer, error: customerError } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-IT-${suffix}`,
+          company_name: customerName,
+          contact_name: customerName,
+        })
+        .select("*")
+        .single();
+
+      if (customerError || !customer) {
+        throw new Error(customerError?.message ?? "Customer setup failed");
+      }
+      customerId = customer.id;
+
+      const { data: job, error: jobError } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-IT-${suffix}`,
+          customer_id: customer.id,
+          status: "new",
+          address: `${streetName} ${houseNumber}, Koeln`,
+          notes: "Integrationstest job_dispatch umlaut employee",
+        })
+        .select("*")
+        .single();
+
+      if (jobError || !job) {
+        throw new Error(jobError?.message ?? "Job setup failed");
+      }
+      jobId = job.id;
+
+      const extractedArgs = JobDispatchSchema.parse({
+        employeeName: extractedEmployeeName,
+        companyName: customerName,
+        street: streetName,
+        houseNumber,
+      });
+
+      const result = await jobDispatchTool.execute(extractedArgs, testCtx as any, true);
+
+      expect(result.ok).toBe(true);
+
+      if (!result.ok) {
+        throw new Error(`Expected success, got: ${result.message}`);
+      }
+
+      expect(result.employee.id).toBe(employee.id);
+      expect(result.employee.fullName).toBe(storedEmployeeName);
+      expect(result.job.id).toBe(job.id);
+      expect(result.job.assigned_employee_id).toBe(employee.id);
+    } finally {
+      if (jobId) {
+        await supabase.from("jobs").delete().eq("id", jobId);
+      }
+      if (customerId) {
+        await supabase.from("customers").delete().eq("id", customerId);
+      }
+      if (employeeId) {
+        await supabase.from("employees").delete().eq("id", employeeId);
+      }
+    }
+  });
+
+  it("returns follow-up when only a house number is available", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const employeeName = `Nora Hagen ${suffix}`;
+    const customerName = `Prisma Baukontor GmbH ${suffix}`;
+
+    let employeeId: string | null = null;
+
+    try {
+      const { data: employee, error: employeeError } = await supabase
+        .from("employees")
+        .insert({
+          employee_number: `E-IT-${suffix}`,
+          full_name: employeeName,
+          role: "Dispo",
+          active: true,
+        })
+        .select("*")
+        .single();
+
+      if (employeeError || !employee) {
+        throw new Error(employeeError?.message ?? "Employee setup failed");
+      }
+      employeeId = employee.id;
+
+      const extractedArgs = JobDispatchSchema.parse({
+        employeeName,
+        companyName: customerName,
+        houseNumber: "14",
+      });
+
+      const result = await jobDispatchTool.execute(extractedArgs, testCtx as any, true);
+
+      expect(result.ok).toBe(false);
+
+      if (result.ok) {
+        throw new Error("Expected follow-up result");
+      }
+
+      expect(result.code).toBe("FOLLOW_UP_REQUIRED");
+      expect(result.message).toMatch(/hausnummer|strasse|auftragsnummer/i);
+    } finally {
+      if (employeeId) {
+        await supabase.from("employees").delete().eq("id", employeeId);
+      }
+    }
   });
 });

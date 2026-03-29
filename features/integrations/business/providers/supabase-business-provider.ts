@@ -1,5 +1,6 @@
 import { getSupabaseServer } from "@/services/supabase/server";
 import {
+  BusinessEmployee,
   BusinessCustomer,
   BusinessProvider,
   CustomerCreateArgs,
@@ -7,6 +8,8 @@ import {
   CustomerLookupArgs,
   CustomerLookupResult,
   Job,
+  JobDispatchArgs,
+  JobDispatchResult,
   JobCreateArgs,
   JobCreateResult,
   Order,
@@ -28,6 +31,17 @@ type CustomerRow = {
   created_at: string;
 };
 
+type EmployeeRow = {
+  id: string;
+  employee_number: string;
+  full_name: string;
+  role: string;
+  phone: string | null;
+  email: string | null;
+  active: boolean;
+  created_at: string;
+};
+
 function mapCustomer(row: CustomerRow): BusinessCustomer {
   return {
     id: row.id,
@@ -44,8 +58,31 @@ function mapCustomer(row: CustomerRow): BusinessCustomer {
   };
 }
 
+function mapEmployee(row: EmployeeRow): BusinessEmployee {
+  return {
+    id: row.id,
+    employeeNumber: row.employee_number,
+    fullName: row.full_name,
+    role: row.role,
+    phone: row.phone,
+    email: row.email,
+    active: row.active,
+    createdAt: row.created_at,
+  };
+}
+
 function normalize(value?: string | null): string {
   return (value ?? "").trim().toLowerCase();
+}
+
+function normalizeLoose(value?: string | null): string {
+  return normalize(value)
+    .replace(/\u00e4/g, "ae")
+    .replace(/\u00f6/g, "oe")
+    .replace(/\u00fc/g, "ue")
+    .replace(/\u00df/g, "ss")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
 }
 
 function normalizePhone(value?: string | null): string {
@@ -54,6 +91,523 @@ function normalizePhone(value?: string | null): string {
 
 function generateUniqueNumber(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+}
+
+function getUtcDayBounds(dateString: string): { from: string; to: string } {
+  const start = new Date(`${dateString}T00:00:00.000Z`);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+
+  return {
+    from: start.toISOString(),
+    to: end.toISOString(),
+  };
+}
+
+type ResolveSuccess<T> = {
+  ok: true;
+  value: T;
+};
+
+type ResolveFailure = {
+  ok: false;
+  result: JobDispatchResult;
+};
+
+type ResolveResult<T> = ResolveSuccess<T> | ResolveFailure;
+
+type ResolvedCustomerScope = {
+  customerIds: string[] | null;
+  customerLabelsById: Map<string, string>;
+};
+
+function normalizeSearchText(value?: string | null): string {
+  return normalizeLoose(value)
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function containsNormalizedPhrase(
+  haystack?: string | null,
+  needle?: string | null,
+): boolean {
+  const normalizedNeedle = normalizeSearchText(needle);
+  if (!normalizedNeedle) {
+    return true;
+  }
+
+  const normalizedHaystack = normalizeSearchText(haystack);
+  if (!normalizedHaystack) {
+    return false;
+  }
+
+  return ` ${normalizedHaystack} `.includes(` ${normalizedNeedle} `);
+}
+
+function matchesStructuredAddress(
+  haystack?: string | null,
+  criteria?: {
+    street: string | null;
+    houseNumber: string | null;
+  },
+): boolean {
+  if (!criteria) {
+    return true;
+  }
+
+  if (criteria.street && !containsNormalizedPhrase(haystack, criteria.street)) {
+    return false;
+  }
+
+  if (
+    criteria.houseNumber &&
+    !containsNormalizedPhrase(haystack, criteria.houseNumber)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function buildCustomerLabel(customer: {
+  customer_number: string;
+  company_name: string;
+  contact_name: string | null;
+}): string {
+  const primaryName = customer.company_name?.trim() || customer.contact_name?.trim();
+  if (!primaryName) {
+    return customer.customer_number;
+  }
+
+  return `${primaryName} (${customer.customer_number})`;
+}
+
+function buildEmployeeLabel(employee: EmployeeRow): string {
+  return `${employee.full_name} (${employee.role}, ${employee.employee_number})`;
+}
+
+function buildJobLabel(job: Job, customerLabelsById: Map<string, string>): string {
+  const parts = [
+    customerLabelsById.get(job.customer_id) ?? null,
+    job.address,
+    job.status,
+  ].filter((part): part is string => Boolean(part));
+
+  return `${job.job_number} (${parts.join(", ")})`;
+}
+
+async function ensureCustomerLabelsForJobs(
+  supabase: ReturnType<typeof getSupabaseServer>,
+  jobs: Job[],
+  existingLabelsById: Map<string, string>,
+  debug: boolean,
+): Promise<Map<string, string>> {
+  const labelsById = new Map(existingLabelsById);
+  const missingCustomerIds = Array.from(
+    new Set(
+      jobs
+        .map((job) => job.customer_id)
+        .filter((customerId) => customerId && !labelsById.has(customerId)),
+    ),
+  );
+
+  if (missingCustomerIds.length === 0) {
+    return labelsById;
+  }
+
+  const { data: customers, error } = await supabase
+    .from("customers")
+    .select("id, customer_number, company_name, contact_name")
+    .in("id", missingCustomerIds);
+
+  if (debug) {
+    console.log("Dispatch Customer Labels:", customers);
+    console.log("Dispatch Customer Labels Error:", error);
+  }
+
+  if (error) {
+    return labelsById;
+  }
+
+  for (const customer of customers ?? []) {
+    labelsById.set(customer.id, buildCustomerLabel(customer));
+  }
+
+  return labelsById;
+}
+
+function exactCustomerMatch(
+  customer: {
+    customer_number: string;
+    company_name: string;
+    contact_name: string | null;
+  },
+  identifier: string,
+): boolean {
+  const normalizedIdentifier = normalizeLoose(identifier);
+  return [
+    customer.customer_number,
+    customer.company_name,
+    customer.contact_name,
+  ].some((value) => normalizeLoose(value) === normalizedIdentifier);
+}
+
+async function resolveEmployee(
+  supabase: ReturnType<typeof getSupabaseServer>,
+  employeeName: string,
+  debug: boolean,
+): Promise<ResolveResult<EmployeeRow>> {
+  const normalizedEmployeeName = normalizeLoose(employeeName);
+  const { data: employeeCandidates, error: employeeLookupError } = await supabase
+    .from("employees")
+    .select("*")
+    .ilike("full_name", `%${employeeName}%`)
+    .eq("active", true)
+    .limit(10);
+
+  if (debug) {
+    console.log("Dispatch Employee Lookup:", employeeCandidates);
+    console.log("Dispatch Employee Lookup Error:", employeeLookupError);
+  }
+
+  if (employeeLookupError) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "EMPLOYEE_LOOKUP_FAILED",
+        message: employeeLookupError.message,
+      },
+    };
+  }
+
+  let resolvedEmployeeCandidates = (employeeCandidates ?? []) as EmployeeRow[];
+
+  if (resolvedEmployeeCandidates.length === 0) {
+    const { data: fallbackEmployees, error: fallbackEmployeeError } = await supabase
+      .from("employees")
+      .select("*")
+      .eq("active", true)
+      .limit(100);
+
+    if (debug) {
+      console.log("Dispatch Employee Fallback Lookup:", fallbackEmployees);
+      console.log(
+        "Dispatch Employee Fallback Lookup Error:",
+        fallbackEmployeeError,
+      );
+    }
+
+    if (fallbackEmployeeError) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          code: "EMPLOYEE_LOOKUP_FAILED",
+          message: fallbackEmployeeError.message,
+        },
+      };
+    }
+
+    resolvedEmployeeCandidates = (fallbackEmployees ?? []).filter((candidate) =>
+      normalizeLoose(candidate.full_name).includes(normalizedEmployeeName),
+    ) as EmployeeRow[];
+  }
+
+  if (resolvedEmployeeCandidates.length === 0) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message: "Ich habe keinen aktiven Mitarbeiter mit diesem Namen gefunden.",
+      },
+    };
+  }
+
+  const exactEmployeeMatches = resolvedEmployeeCandidates.filter(
+    (candidate) => normalizeLoose(candidate.full_name) === normalizedEmployeeName,
+  );
+
+  if (exactEmployeeMatches.length === 1) {
+    return {
+      ok: true,
+      value: exactEmployeeMatches[0] as EmployeeRow,
+    };
+  }
+
+  if (exactEmployeeMatches.length > 1 || resolvedEmployeeCandidates.length > 1) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message: "Ich habe mehrere passende Mitarbeiter gefunden. Wen genau soll ich zuweisen?",
+        options: resolvedEmployeeCandidates.map((employee) =>
+          buildEmployeeLabel(employee as EmployeeRow),
+        ),
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    value: resolvedEmployeeCandidates[0] as EmployeeRow,
+  };
+}
+
+async function resolveCustomerScope(
+  supabase: ReturnType<typeof getSupabaseServer>,
+  customerIdentifier: string | null,
+  context: {
+    hasAddressCriteria: boolean;
+    jobNumber: string | null;
+    jobDate: string | null;
+  },
+  debug: boolean,
+): Promise<ResolveResult<ResolvedCustomerScope>> {
+  if (!customerIdentifier) {
+    return {
+      ok: true,
+      value: {
+        customerIds: null,
+        customerLabelsById: new Map(),
+      },
+    };
+  }
+
+  const { data: customerMatches, error: customerLookupError } = await supabase
+    .from("customers")
+    .select("id, customer_number, company_name, contact_name")
+    .or(
+      [
+        `customer_number.ilike.%${customerIdentifier}%`,
+        `company_name.ilike.%${customerIdentifier}%`,
+        `contact_name.ilike.%${customerIdentifier}%`,
+      ].join(","),
+    )
+    .limit(20);
+
+  if (debug) {
+    console.log("Dispatch Customer Lookup:", customerMatches);
+    console.log("Dispatch Customer Lookup Error:", customerLookupError);
+  }
+
+  if (customerLookupError) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "JOB_LOOKUP_FAILED",
+        message: customerLookupError.message,
+      },
+    };
+  }
+
+  let resolvedCustomerMatches = customerMatches ?? [];
+
+  if (resolvedCustomerMatches.length === 0) {
+    const { data: fallbackCustomers, error: fallbackCustomersError } = await supabase
+      .from("customers")
+      .select("id, customer_number, company_name, contact_name")
+      .limit(100);
+
+    if (fallbackCustomersError) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          code: "JOB_LOOKUP_FAILED",
+          message: fallbackCustomersError.message,
+        },
+      };
+    }
+
+    const normalizedCustomerIdentifier = normalizeLoose(customerIdentifier);
+    resolvedCustomerMatches = (fallbackCustomers ?? []).filter((customer) => {
+      const haystacks = [
+        customer.customer_number,
+        customer.company_name,
+        customer.contact_name,
+      ];
+
+      return haystacks.some((candidateValue) =>
+        normalizeLoose(candidateValue).includes(normalizedCustomerIdentifier),
+      );
+    });
+  }
+
+  if (resolvedCustomerMatches.length === 0) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message: "Ich konnte keinen passenden Kunden zur Jobsuche finden.",
+      },
+    };
+  }
+
+  const exactMatches = resolvedCustomerMatches.filter((customer) =>
+    exactCustomerMatch(customer, customerIdentifier),
+  );
+
+  const scopedMatches = exactMatches.length > 0 ? exactMatches : resolvedCustomerMatches;
+
+  if (
+    scopedMatches.length > 1 &&
+    !context.hasAddressCriteria &&
+    !context.jobNumber &&
+    !context.jobDate
+  ) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message: "Ich habe mehrere passende Kunden gefunden. Welchen meinst du genau?",
+        options: scopedMatches.map((customer) => buildCustomerLabel(customer)),
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      customerIds: scopedMatches.map((customer) => customer.id),
+      customerLabelsById: new Map(
+        scopedMatches.map((customer) => [customer.id, buildCustomerLabel(customer)]),
+      ),
+    },
+  };
+}
+
+async function resolveJob(
+  supabase: ReturnType<typeof getSupabaseServer>,
+  criteria: {
+    jobNumber: string | null;
+    customerIds: string[] | null;
+    jobDate: string | null;
+    street: string | null;
+    houseNumber: string | null;
+    customerLabelsById: Map<string, string>;
+  },
+  debug: boolean,
+): Promise<ResolveResult<Job>> {
+  let jobQuery = supabase.from("jobs").select("*");
+
+  if (criteria.jobNumber) {
+    jobQuery = jobQuery.ilike("job_number", `%${criteria.jobNumber}%`);
+  }
+
+  if (criteria.customerIds && criteria.customerIds.length > 0) {
+    jobQuery = jobQuery.in("customer_id", criteria.customerIds);
+  }
+
+  if (criteria.jobDate) {
+    const bounds = getUtcDayBounds(criteria.jobDate);
+    jobQuery = jobQuery.gte("created_at", bounds.from).lt("created_at", bounds.to);
+  }
+
+  const { data: jobCandidates, error: jobLookupError } = await jobQuery
+    .order("created_at", { ascending: false })
+    .limit(criteria.jobNumber ? 20 : 50);
+
+  if (debug) {
+    console.log("Dispatch Job Lookup:", jobCandidates);
+    console.log("Dispatch Job Lookup Error:", jobLookupError);
+  }
+
+  if (jobLookupError) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "JOB_LOOKUP_FAILED",
+        message: jobLookupError.message,
+      },
+    };
+  }
+
+  const resolvedJobCandidates = (jobCandidates ?? []).filter((job) =>
+    matchesStructuredAddress(job.address, {
+      street: criteria.street,
+      houseNumber: criteria.houseNumber,
+    }),
+  );
+
+  if (resolvedJobCandidates.length === 0) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message: "Ich konnte keinen passenden Auftrag finden.",
+      },
+    };
+  }
+
+  if (criteria.jobNumber) {
+    const exactJobMatches = resolvedJobCandidates.filter(
+      (candidate) =>
+        normalizeLoose(candidate.job_number) === normalizeLoose(criteria.jobNumber),
+    );
+
+    if (exactJobMatches.length === 1) {
+      return {
+        ok: true,
+        value: exactJobMatches[0] as Job,
+      };
+    }
+
+    if (exactJobMatches.length > 1) {
+      const customerLabelsById = await ensureCustomerLabelsForJobs(
+        supabase,
+        exactJobMatches as Job[],
+        criteria.customerLabelsById,
+        debug,
+      );
+
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          code: "FOLLOW_UP_REQUIRED",
+          message: "Ich habe mehrere Auftraege mit dieser Auftragsnummer gefunden. Welchen meinst du?",
+          options: exactJobMatches.map((job) =>
+            buildJobLabel(job as Job, customerLabelsById),
+          ),
+        },
+      };
+    }
+  }
+
+  if (resolvedJobCandidates.length === 1) {
+    return {
+      ok: true,
+      value: resolvedJobCandidates[0] as Job,
+    };
+  }
+
+  const customerLabelsById = await ensureCustomerLabelsForJobs(
+    supabase,
+    resolvedJobCandidates as Job[],
+    criteria.customerLabelsById,
+    debug,
+  );
+
+  return {
+    ok: false,
+    result: {
+      ok: false,
+      code: "FOLLOW_UP_REQUIRED",
+      message: "Ich habe mehrere passende Auftraege gefunden. Welchen soll ich zuweisen?",
+      options: resolvedJobCandidates.map((job) =>
+        buildJobLabel(job as Job, customerLabelsById),
+      ),
+    },
+  };
 }
 
 export const supabaseBusinessProvider: BusinessProvider = {
@@ -127,7 +681,7 @@ export const supabaseBusinessProvider: BusinessProvider = {
         ok: false,
         code: "FOLLOW_UP_REQUIRED",
         message:
-          "Für einen neuen Kunden brauche ich mindestens Name und Telefonnummer.",
+          "FÃ¼r einen neuen Kunden brauche ich mindestens Name und Telefonnummer.",
       };
     }
 
@@ -343,7 +897,7 @@ export const supabaseBusinessProvider: BusinessProvider = {
       return {
         ok: false,
         code: "FOLLOW_UP_REQUIRED",
-        message: "Für einen neuen Auftrag brauche ich mindestens den Kundennamen.",
+        message: "FÃ¼r einen neuen Auftrag brauche ich mindestens den Kundennamen.",
       };
     }
 
@@ -486,4 +1040,145 @@ export const supabaseBusinessProvider: BusinessProvider = {
       job: job as Job,
     };
   },
+
+  async jobDispatch(
+    args: JobDispatchArgs,
+    debug: boolean = false,
+  ): Promise<JobDispatchResult> {
+    const supabase = getSupabaseServer();
+
+    const employeeName = args.employeeName?.trim() ?? "";
+    const jobNumber = args.jobNumber?.trim() || null;
+    const customerIdentifier =
+      (args.customerIdentifier ?? args.customerName ?? args.companyName)?.trim() ||
+      null;
+    const jobDate = args.jobDate?.trim() || null;
+    const street = args.street?.trim() || null;
+    const houseNumber = args.houseNumber?.trim() || null;
+    const hasAddressCriteria = Boolean(street);
+
+    if (!employeeName) {
+      return {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message: "Bitte nenne den vollstaendigen Namen des Mitarbeiters.",
+      };
+    }
+
+    if (!jobNumber && houseNumber && !street) {
+      return {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message:
+          "Die Hausnummer allein reicht nicht. Bitte nenne auch die Strasse oder die Auftragsnummer.",
+      };
+    }
+
+    if (!jobNumber) {
+      const criteriaCount = [
+        customerIdentifier,
+        jobDate,
+        hasAddressCriteria ? "street" : null,
+      ].filter(Boolean).length;
+
+      if (criteriaCount < 1) {
+        return {
+          ok: false,
+          code: "FOLLOW_UP_REQUIRED",
+          message:
+            "Ohne Auftragsnummer brauche ich mindestens ein Kriterium wie Kunde, Strasse oder Datum.",
+        };
+      }
+    }
+
+    if (debug) {
+      console.log("Dispatch Criteria:", {
+        employeeName,
+        jobNumber,
+        customerIdentifier,
+        jobDate,
+        street,
+        houseNumber,
+      });
+    }
+
+    const employeeResolution = await resolveEmployee(supabase, employeeName, debug);
+    if (!employeeResolution.ok) {
+      return employeeResolution.result;
+    }
+
+    const customerScopeResolution = await resolveCustomerScope(
+      supabase,
+      customerIdentifier,
+      {
+        hasAddressCriteria,
+        jobNumber,
+        jobDate,
+      },
+      debug,
+    );
+    if (!customerScopeResolution.ok) {
+      return customerScopeResolution.result;
+    }
+
+    const jobResolution = await resolveJob(
+      supabase,
+      {
+        jobNumber,
+        customerIds: customerScopeResolution.value.customerIds,
+        jobDate,
+        street,
+        houseNumber,
+        customerLabelsById: customerScopeResolution.value.customerLabelsById,
+      },
+      debug,
+    );
+    if (!jobResolution.ok) {
+      return jobResolution.result;
+    }
+
+    const resolvedEmployee = employeeResolution.value;
+    const resolvedJob = jobResolution.value;
+
+    if (resolvedJob.status === "done" || resolvedJob.status === "cancelled") {
+      return {
+        ok: false,
+        code: "JOB_DISPATCH_FAILED",
+        message:
+          "Dieser Auftrag ist bereits abgeschlossen oder storniert und kann nicht neu disponiert werden.",
+      };
+    }
+
+    const { data: dispatchedJob, error: dispatchUpdateError } = await supabase
+      .from("jobs")
+      .update({
+        assigned_employee_id: resolvedEmployee.id,
+        status: "scheduled",
+      })
+      .eq("id", resolvedJob.id)
+      .select("*")
+      .single();
+
+    if (debug) {
+      console.log("Dispatch Updated Job:", dispatchedJob);
+      console.log("Dispatch Updated Job Error:", dispatchUpdateError);
+    }
+
+    if (dispatchUpdateError || !dispatchedJob) {
+      return {
+        ok: false,
+        code: "JOB_DISPATCH_FAILED",
+        message: dispatchUpdateError?.message ?? "Mitarbeiter konnte nicht zugewiesen werden.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: `Auftrag ${dispatchedJob.job_number} wurde ${resolvedEmployee.full_name} zugewiesen.`,
+      job: dispatchedJob as Job,
+      employee: mapEmployee(resolvedEmployee),
+    };
+
+  },
 };
+
