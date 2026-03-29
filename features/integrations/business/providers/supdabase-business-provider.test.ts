@@ -7,6 +7,7 @@ import {
   JobDispatchSchema,
   jobDispatchTool,
 } from "@/features/ai/tools/defs/job_dispatch";
+import { jobLookupTool } from "@/features/ai/tools/defs/job_lookup";
 import { noteCreateTool } from "@/features/ai/tools/defs/note_create";
 import { getSupabaseServer } from "@/services/supabase/server";
 
@@ -1005,6 +1006,217 @@ describe("note_create integration", () => {
         noteText: "Schluessel liegt im Briefkasten.",
         houseNumber: "14",
         companyName: "Kupferhain Ausbau GmbH",
+      },
+      testCtx as any,
+      true,
+    );
+
+    expect(result.ok).toBe(false);
+
+    if (result.ok) {
+      throw new Error("Expected follow-up result");
+    }
+
+    expect(result.code).toBe("FOLLOW_UP_REQUIRED");
+    expect(result.message).toMatch(/hausnummer|strasse|auftragsnummer/i);
+  });
+});
+
+describe("job_lookup integration", () => {
+  it("returns full job info for a uniquely resolved job", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const customerName = `Aegidius Projektservice GmbH ${suffix}`;
+    const employeeName = `Lea Hofmeister ${suffix}`;
+    const streetName = `Aegidiusstrasse ${suffix}`;
+    const houseNumber = "12";
+    let customerId: string | null = null;
+    let employeeId: string | null = null;
+    let jobId: string | null = null;
+
+    try {
+      const { data: customer, error: customerError } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-IT-${suffix}`,
+          company_name: customerName,
+          contact_name: customerName,
+        })
+        .select("*")
+        .single();
+
+      if (customerError || !customer) {
+        throw new Error(customerError?.message ?? "Customer setup failed");
+      }
+      customerId = customer.id;
+
+      const { data: employee, error: employeeError } = await supabase
+        .from("employees")
+        .insert({
+          employee_number: `E-IT-${suffix}`,
+          full_name: employeeName,
+          role: "Dispo",
+          active: true,
+        })
+        .select("*")
+        .single();
+
+      if (employeeError || !employee) {
+        throw new Error(employeeError?.message ?? "Employee setup failed");
+      }
+      employeeId = employee.id;
+
+      const existingNote = "Rueckmeldung vom Kunden liegt vor.";
+      const { data: job, error: jobError } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-IT-${suffix}`,
+          customer_id: customer.id,
+          assigned_employee_id: employee.id,
+          status: "scheduled",
+          address: `${streetName} ${houseNumber}, Koeln`,
+          notes: existingNote,
+        })
+        .select("*")
+        .single();
+
+      if (jobError || !job) {
+        throw new Error(jobError?.message ?? "Job setup failed");
+      }
+      jobId = job.id;
+
+      const result = await jobLookupTool.execute(
+        {
+          companyName: customerName,
+          street: streetName,
+          houseNumber,
+        },
+        testCtx as any,
+        true,
+      );
+
+      expect(result.ok).toBe(true);
+
+      if (!result.ok) {
+        throw new Error(`Expected success, got: ${result.message}`);
+      }
+
+      expect(result.job.id).toBe(job.id);
+      expect(result.job.address).toContain(streetName);
+      expect(result.job.address).toContain(houseNumber);
+      expect(result.job.status).toBe("scheduled");
+      expect(result.job.notes).toContain(existingNote);
+      expect(result.customerName).toBe(customerName);
+      expect(result.assignedEmployeeName).toBe(employeeName);
+    } finally {
+      if (jobId) {
+        await supabase.from("jobs").delete().eq("id", jobId);
+      }
+      if (customerId) {
+        await supabase.from("customers").delete().eq("id", customerId);
+      }
+      if (employeeId) {
+        await supabase.from("employees").delete().eq("id", employeeId);
+      }
+    }
+  });
+
+  it("returns follow-up when multiple jobs match the lookup target", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const customerName = `Aegidius Projektservice GmbH ${suffix}`;
+    const streetName = `Aegidiusstrasse ${suffix}`;
+    const houseNumber = "12";
+    let customerId: string | null = null;
+    const jobIds: string[] = [];
+
+    try {
+      const { data: customer, error: customerError } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-IT-${suffix}`,
+          company_name: customerName,
+          contact_name: customerName,
+        })
+        .select("*")
+        .single();
+
+      if (customerError || !customer) {
+        throw new Error(customerError?.message ?? "Customer setup failed");
+      }
+      customerId = customer.id;
+
+      const { data: firstJob, error: firstJobError } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-IT-${suffix}-A`,
+          customer_id: customer.id,
+          status: "new",
+          address: `${streetName} ${houseNumber} Nord, Koeln`,
+        })
+        .select("*")
+        .single();
+
+      if (firstJobError || !firstJob) {
+        throw new Error(firstJobError?.message ?? "First job setup failed");
+      }
+      jobIds.push(firstJob.id);
+
+      const { data: secondJob, error: secondJobError } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-IT-${suffix}-B`,
+          customer_id: customer.id,
+          status: "new",
+          address: `${streetName} ${houseNumber} Sued, Koeln`,
+        })
+        .select("*")
+        .single();
+
+      if (secondJobError || !secondJob) {
+        throw new Error(secondJobError?.message ?? "Second job setup failed");
+      }
+      jobIds.push(secondJob.id);
+
+      const result = await jobLookupTool.execute(
+        {
+          companyName: customerName,
+          street: streetName,
+          houseNumber,
+        },
+        testCtx as any,
+        true,
+      );
+
+      expect(result.ok).toBe(false);
+
+      if (result.ok) {
+        throw new Error("Expected follow-up result");
+      }
+
+      expect(result.code).toBe("FOLLOW_UP_REQUIRED");
+      expect(result.message).toMatch(/mehrere|welchen|genau/i);
+      expect(result.options ?? []).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining(firstJob.job_number),
+          expect.stringContaining(secondJob.job_number),
+        ]),
+      );
+    } finally {
+      if (jobIds.length > 0) {
+        await supabase.from("jobs").delete().in("id", jobIds);
+      }
+      if (customerId) {
+        await supabase.from("customers").delete().eq("id", customerId);
+      }
+    }
+  });
+
+  it("returns follow-up when the lookup target only contains a house number", async () => {
+    const result = await jobLookupTool.execute(
+      {
+        companyName: "Kupferhain Ausbau GmbH",
+        houseNumber: "14",
       },
       testCtx as any,
       true,

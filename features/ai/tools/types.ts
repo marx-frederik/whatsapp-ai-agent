@@ -33,6 +33,7 @@ import { customerCreateTool } from "./defs/customer_create";
 import { customerLookupTool } from "./defs/customer_lookup";
 import { jobCreateTool } from "./defs/job_create";
 import { jobDispatchTool } from "./defs/job_dispatch";
+import { jobLookupTool } from "./defs/job_lookup";
 import { noteCreateTool } from "./defs/note_create";
 import { orderCreateTool } from "./defs/order_create";
 
@@ -42,5 +43,6 @@ export const ToolRegistry = [
   customerLookupTool,
   jobCreateTool,
   jobDispatchTool,
+  jobLookupTool,
   noteCreateTool,
 ] as const;

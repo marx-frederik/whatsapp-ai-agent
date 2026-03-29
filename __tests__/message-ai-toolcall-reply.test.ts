@@ -592,6 +592,152 @@ describe("AI integration: note_create (skipped by default)", () => {
   }, 60000);
 });
 
+describe("AI integration: job_lookup (skipped by default)", () => {
+  it.skip("returns address and status for a clearly identified job", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const ids: TestRecordIds = {
+      employeeIds: [],
+      customerIds: [],
+      jobIds: [],
+    };
+
+    const customerName = "Heinz Mueller Projektservice";
+    const street = "Aegidiusstrasse 12";
+    const noteText = "Ruecksprache mit Kunde erfolgt.";
+
+    try {
+      const { data: customer } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-AI-${suffix}`,
+          company_name: customerName,
+          contact_name: customerName,
+        })
+        .select("*")
+        .single();
+      if (!customer) throw new Error("Customer setup failed");
+      ids.customerIds.push(customer.id);
+
+      const { data: job } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-AI-${suffix}`,
+          customer_id: customer.id,
+          status: "scheduled",
+          address: `${street}, Koeln`,
+          notes: noteText,
+        })
+        .select("*")
+        .single();
+      if (!job) throw new Error("Job setup failed");
+      ids.jobIds.push(job.id);
+
+      const prompt = `Wie ist die Adresse vom Projekt fuer Kunde ${customerName}?`;
+
+      const result = await brainAgent.process({
+        chatId: `ai-job-lookup-${suffix}`,
+        text: prompt,
+        brainContext: {
+          locale: "de-DE",
+          timezone: "Europe/Berlin",
+        },
+        debug: true,
+      });
+
+      expect(result.toolNames ?? []).toContain("job_lookup");
+      expect(result.finalOutput).toMatch(/aegidiusstrasse 12/i);
+      expect(result.finalOutput).toMatch(/heinz mueller projektservice/i);
+      expect(result.finalOutput).toMatch(/adresse|status|auftrag|projekt/i);
+    } finally {
+      await cleanupTestRecords(ids);
+    }
+  }, 60000);
+
+  it.skip("asks for the right project when one customer has multiple jobs and does not ask for the address itself", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const ids: TestRecordIds = {
+      employeeIds: [],
+      customerIds: [],
+      jobIds: [],
+    };
+
+    const customerName = "Heinz Mueller Projektservice";
+    const firstStreet = "Aegidiusstrasse 12";
+    const secondStreet = "Mondgasse 14";
+
+    try {
+      const { data: customer } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-AI-${suffix}`,
+          company_name: customerName,
+          contact_name: customerName,
+        })
+        .select("*")
+        .single();
+      if (!customer) throw new Error("Customer setup failed");
+      ids.customerIds.push(customer.id);
+
+      const { data: firstJob } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-AI-${suffix}-A`,
+          customer_id: customer.id,
+          status: "new",
+          address: `${firstStreet}, Koeln`,
+          notes: "AI lookup ambiguity case A",
+        })
+        .select("*")
+        .single();
+      if (!firstJob) throw new Error("First job setup failed");
+      ids.jobIds.push(firstJob.id);
+
+      const { data: secondJob } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-AI-${suffix}-B`,
+          customer_id: customer.id,
+          status: "scheduled",
+          address: `${secondStreet}, Koeln`,
+          notes: "AI lookup ambiguity case B",
+        })
+        .select("*")
+        .single();
+      if (!secondJob) throw new Error("Second job setup failed");
+      ids.jobIds.push(secondJob.id);
+
+      const prompt = `Wie ist die Adresse vom Projekt fuer Kunde ${customerName}?`;
+
+      const result = await brainAgent.process({
+        chatId: `ai-job-lookup-ambiguous-${suffix}`,
+        text: prompt,
+        brainContext: {
+          locale: "de-DE",
+          timezone: "Europe/Berlin",
+        },
+        debug: true,
+      });
+
+      expect(result.toolNames ?? []).toContain("job_lookup");
+      expect(result.finalOutput).toMatch(/mehrere|welchen|genau|projekt/i);
+      expect(result.finalOutput).not.toMatch(
+        /nenne.*strasse|nenne.*hausnummer|brauch.*strasse|brauch.*hausnummer/i,
+      );
+      expect(result.finalOutput).not.toMatch(/strasse und hausnummer/i);
+      expect(result.finalOutput).toMatch(
+        new RegExp(
+          `${firstJob.job_number}|${secondJob.job_number}|aegidiusstrasse|mondgasse`,
+          "i",
+        ),
+      );
+    } finally {
+      await cleanupTestRecords(ids);
+    }
+  }, 60000);
+});
+
 describe("AI integration: existing legacy scenarios (kept skipped)", () => {
   it.skip("processes an inbound message, executes customer lookup and returns a customer reply", async () => {
     const msg: NormalizedMessage = {

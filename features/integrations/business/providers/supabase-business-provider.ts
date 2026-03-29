@@ -10,6 +10,8 @@ import {
   Job,
   JobDispatchArgs,
   JobDispatchResult,
+  JobLookupArgs,
+  JobLookupResult,
   JobCreateArgs,
   JobCreateResult,
   NoteCreateArgs,
@@ -1251,6 +1253,86 @@ export const supabaseBusinessProvider: BusinessProvider = {
       message: `Auftrag ${dispatchedJob.job_number} wurde ${resolvedEmployee.full_name} zugewiesen.`,
       job: dispatchedJob as Job,
       employee: mapEmployee(resolvedEmployee),
+    };
+  },
+
+  async jobLookup(
+    args: JobLookupArgs,
+    debug: boolean = false,
+  ): Promise<JobLookupResult> {
+    const supabase = getSupabaseServer();
+    const jobReferenceCriteria = extractJobReferenceCriteria(args);
+
+    if (debug) {
+      console.log("Job Lookup Criteria:", jobReferenceCriteria);
+    }
+
+    const jobResolution = await resolveJobReference(
+      supabase,
+      jobReferenceCriteria,
+      debug,
+    );
+    if (!jobResolution.ok) {
+      return jobResolution.result;
+    }
+
+    const resolvedJob = jobResolution.value;
+
+    const { data: customer, error: customerError } = await supabase
+      .from("customers")
+      .select("*")
+      .eq("id", resolvedJob.customer_id)
+      .single();
+
+    if (debug) {
+      console.log("Job Lookup Customer:", customer);
+      console.log("Job Lookup Customer Error:", customerError);
+    }
+
+    if (customerError || !customer) {
+      return {
+        ok: false,
+        code: "JOB_LOOKUP_FAILED",
+        message:
+          customerError?.message ??
+          "Kundendaten zum Auftrag konnten nicht geladen werden.",
+      };
+    }
+
+    let assignedEmployeeName: string | null = null;
+
+    if (resolvedJob.assigned_employee_id) {
+      const { data: employee, error: employeeError } = await supabase
+        .from("employees")
+        .select("full_name")
+        .eq("id", resolvedJob.assigned_employee_id)
+        .single();
+
+      if (debug) {
+        console.log("Job Lookup Employee:", employee);
+        console.log("Job Lookup Employee Error:", employeeError);
+      }
+
+      if (employeeError) {
+        return {
+          ok: false,
+          code: "JOB_LOOKUP_FAILED",
+          message: employeeError.message,
+        };
+      }
+
+      assignedEmployeeName = employee?.full_name ?? null;
+    }
+
+    return {
+      ok: true,
+      message: `Auftragsinformationen fuer ${resolvedJob.job_number} wurden geladen.`,
+      job: resolvedJob,
+      customerName:
+        customer.company_name?.trim() ||
+        customer.contact_name?.trim() ||
+        customer.customer_number,
+      assignedEmployeeName,
     };
   },
 

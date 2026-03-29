@@ -1,5 +1,6 @@
 import { CustomerCreateSchema } from "@/features/ai/tools/defs/customer_create";
 import { JobDispatchSchema } from "@/features/ai/tools/defs/job_dispatch";
+import { JobLookupSchema } from "@/features/ai/tools/defs/job_lookup";
 import { NoteCreateSchema } from "@/features/ai/tools/defs/note_create";
 import { CustomerLookupSchema } from "@/features/ai/tools/defs/customer_lookup";
 import { OrderCreateSchema } from "@/features/ai/tools/defs/order_create";
@@ -163,6 +164,23 @@ export type JobDispatchResult =
       options?: string[];
     };
 
+export type JobLookupArgs = z.infer<typeof JobLookupSchema>;
+
+export type JobLookupResult =
+  | {
+      ok: true;
+      message: string;
+      job: Job;
+      customerName: string;
+      assignedEmployeeName: string | null;
+    }
+  | {
+      ok: false;
+      code: "FOLLOW_UP_REQUIRED" | "JOB_LOOKUP_FAILED";
+      message: string;
+      options?: string[];
+    };
+
 export type NoteCreateArgs = z.infer<typeof NoteCreateSchema>;
 
 export type NoteCreateResult =
@@ -194,5 +212,6 @@ export interface BusinessProvider {
     args: JobDispatchArgs,
     debug: boolean,
   ): Promise<JobDispatchResult>;
+  jobLookup(args: JobLookupArgs, debug: boolean): Promise<JobLookupResult>;
   noteCreate(args: NoteCreateArgs, debug: boolean): Promise<NoteCreateResult>;
 }
