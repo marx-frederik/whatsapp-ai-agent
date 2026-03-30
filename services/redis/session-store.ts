@@ -3,9 +3,17 @@ import { getRedis } from "./client";
 
 const PREFIX = "chat:session";
 
+const PendingFollowUpSchema = z.object({
+  toolName: z.string(),
+  message: z.string(),
+  options: z.array(z.string()).default([]),
+  createdAt: z.string(),
+});
+
 export const ChatSessionSchema = z.object({
   chatId: z.string(),
   lastResponseId: z.string().optional(),
+  pending: PendingFollowUpSchema.optional(),
   updatedAt: z.string(),
 });
 

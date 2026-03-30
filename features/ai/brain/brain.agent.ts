@@ -25,11 +25,12 @@ export const brainAgent = {
     debug,
   }: BrainAgentInput): Promise<BrainAgentResult> {
     const session = await getChatSession(chatId);
+    const effectiveText = buildPendingAwareText(text?.trim() ?? "", session?.pending);
 
     const result = await runWhatsappAgent(
       {
         chatId: chatId,
-        text: text?.trim() ?? "",
+        text: effectiveText,
         previousResponseId: session?.lastResponseId,
         brainContext,
       },
@@ -39,6 +40,12 @@ export const brainAgent = {
     await setChatSession({
       chatId,
       lastResponseId: result.responseId,
+      pending: result.pendingFollowUp
+        ? {
+            ...result.pendingFollowUp,
+            createdAt: new Date().toISOString(),
+          }
+        : undefined,
       updatedAt: new Date().toISOString(),
     });
 
@@ -49,3 +56,30 @@ export const brainAgent = {
     };
   },
 };
+
+function buildPendingAwareText(
+  text: string,
+  pending?: {
+    toolName: string;
+    message: string;
+    options: string[];
+    createdAt: string;
+  },
+): string {
+  if (!pending) {
+    return text;
+  }
+
+  const optionLines =
+    pending.options.length > 0
+      ? `Offene Optionen: ${pending.options.join(" | ")}`
+      : "Offene Optionen: keine expliziten Optionen";
+
+  return [
+    "Kontext aus der vorherigen Rueckfrage. Nutze ihn nur, wenn die aktuelle Nachricht darauf antwortet.",
+    `Offenes Tool: ${pending.toolName}`,
+    `Vorherige Rueckfrage: ${pending.message}`,
+    optionLines,
+    `Aktuelle Nutzerantwort: ${text}`,
+  ].join("\n");
+}

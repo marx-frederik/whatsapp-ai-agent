@@ -1,6 +1,6 @@
 import { Runner, withTrace } from "@openai/agents";
 import { createWhatsAppAgent } from "@/features/ai/agents/whatsapp-agent";
-import { createAgentTools } from "../tools/agent-tool-bridge";
+import { createAgentTools, ExecutedToolCall } from "../tools/agent-tool-bridge";
 import { BrainContext } from "./types";
 import { ToolName, ToolRegistry } from "../tools/types";
 
@@ -16,15 +16,21 @@ export type RunWhatsappAgentResult = {
   responseId?: string;
   raw: unknown;
   toolNames: ToolName[];
+  pendingFollowUp: {
+    toolName: ToolName;
+    message: string;
+    options: string[];
+  } | null;
 };
 
 export async function runWhatsappAgent(
   input: RunWhatsappAgentInput,
-  debug:boolean,
+  debug: boolean,
 ): Promise<RunWhatsappAgentResult> {
   return withTrace("whatsapp-agent-run", async () => {
     // Build tools per run so context and tool execution tracking are scoped to this request.
-    const tools = createAgentTools(input.brainContext ?? {});
+    const executedTools: ExecutedToolCall[] = [];
+    const tools = createAgentTools(input.brainContext ?? {}, executedTools);
     const agent = createWhatsAppAgent(tools);
 
     const runner = new Runner();
@@ -72,10 +78,61 @@ export async function runWhatsappAgent(
       responseId: result.lastResponseId,
       raw: result,
       toolNames: toolNames,
+      pendingFollowUp: extractPendingFollowUp(executedTools),
     };
   });
 }
 
 function isToolName(rawToolName: unknown): rawToolName is ToolName {
   return ToolRegistry.some((tool) => tool.name === rawToolName);
+}
+
+function extractPendingFollowUp(
+  executedTools: ExecutedToolCall[],
+): {
+  toolName: ToolName;
+  message: string;
+  options: string[];
+} | null {
+  for (let index = executedTools.length - 1; index >= 0; index -= 1) {
+    const executedTool = executedTools[index];
+    if (isFollowUpResult(executedTool.result)) {
+      return {
+        toolName: executedTool.toolName,
+        message: executedTool.result.message,
+        options: executedTool.result.options ?? [],
+      };
+    }
+  }
+
+  return null;
+}
+
+function isFollowUpResult(
+  value: unknown,
+): value is {
+  ok: false;
+  code: "FOLLOW_UP_REQUIRED";
+  message: string;
+  options?: string[];
+} {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as {
+    ok?: unknown;
+    code?: unknown;
+    message?: unknown;
+    options?: unknown;
+  };
+
+  return (
+    candidate.ok === false &&
+    candidate.code === "FOLLOW_UP_REQUIRED" &&
+    typeof candidate.message === "string" &&
+    (candidate.options === undefined ||
+      (Array.isArray(candidate.options) &&
+        candidate.options.every((option) => typeof option === "string")))
+  );
 }

@@ -1,6 +1,8 @@
 import { CustomerCreateSchema } from "@/features/ai/tools/defs/customer_create";
+import { CustomerUpdateSchema } from "@/features/ai/tools/defs/customer_update";
 import { JobDispatchSchema } from "@/features/ai/tools/defs/job_dispatch";
 import { JobLookupSchema } from "@/features/ai/tools/defs/job_lookup";
+import { JobUpdateSchema } from "@/features/ai/tools/defs/job_update";
 import { NoteCreateSchema } from "@/features/ai/tools/defs/note_create";
 import { CustomerLookupSchema } from "@/features/ai/tools/defs/customer_lookup";
 import { OrderCreateSchema } from "@/features/ai/tools/defs/order_create";
@@ -49,6 +51,25 @@ export type CustomerCreateResult =
         | "FOLLOW_UP_REQUIRED"
         | "CUSTOMER_LOOKUP_FAILED"
         | "CUSTOMER_CREATE_FAILED";
+      message: string;
+      options?: string[];
+    };
+
+export type CustomerUpdateArgs = z.infer<typeof CustomerUpdateSchema>;
+
+export type CustomerUpdateResult =
+  | {
+      ok: true;
+      message: string;
+      customer: BusinessCustomer;
+      updatedFields: string[];
+    }
+  | {
+      ok: false;
+      code:
+        | "FOLLOW_UP_REQUIRED"
+        | "CUSTOMER_LOOKUP_FAILED"
+        | "CUSTOMER_UPDATE_FAILED";
       message: string;
       options?: string[];
     };
@@ -164,6 +185,25 @@ export type JobDispatchResult =
       options?: string[];
     };
 
+export type JobUpdateArgs = z.infer<typeof JobUpdateSchema>;
+
+export type JobUpdateResult =
+  | {
+      ok: true;
+      message: string;
+      job: Job;
+      updatedFields: string[];
+    }
+  | {
+      ok: false;
+      code:
+        | "FOLLOW_UP_REQUIRED"
+        | "JOB_LOOKUP_FAILED"
+        | "JOB_UPDATE_FAILED";
+      message: string;
+      options?: string[];
+    };
+
 export type JobLookupArgs = z.infer<typeof JobLookupSchema>;
 
 export type JobLookupResult =
@@ -203,6 +243,10 @@ export interface BusinessProvider {
     args: CustomerCreateArgs,
     debug: boolean,
   ): Promise<CustomerCreateResult>;
+  customerUpdate(
+    args: CustomerUpdateArgs,
+    debug: boolean,
+  ): Promise<CustomerUpdateResult>;
   orderCreate(
     args: OrderCreateArgs,
     debug: boolean,
@@ -212,6 +256,7 @@ export interface BusinessProvider {
     args: JobDispatchArgs,
     debug: boolean,
   ): Promise<JobDispatchResult>;
+  jobUpdate(args: JobUpdateArgs, debug: boolean): Promise<JobUpdateResult>;
   jobLookup(args: JobLookupArgs, debug: boolean): Promise<JobLookupResult>;
   noteCreate(args: NoteCreateArgs, debug: boolean): Promise<NoteCreateResult>;
 }

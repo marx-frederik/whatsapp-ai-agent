@@ -738,6 +738,134 @@ describe("AI integration: job_lookup (skipped by default)", () => {
   }, 60000);
 });
 
+describe("AI integration: customer_update (skipped by default)", () => {
+  it.skip("updates phone and email for a clearly identified customer", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const ids: TestRecordIds = {
+      employeeIds: [],
+      customerIds: [],
+      jobIds: [],
+    };
+
+    const customerName = "Kupferstern Service GmbH";
+    const updatedPhone = "01701234567";
+    const updatedEmail = "kontakt@kupferstern-service.test";
+
+    try {
+      const { data: customer } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-AI-${suffix}`,
+          company_name: customerName,
+          contact_name: customerName,
+          phone: "030000000",
+        })
+        .select("*")
+        .single();
+      if (!customer) throw new Error("Customer setup failed");
+      ids.customerIds.push(customer.id);
+
+      const prompt = `Ergaenze bei Kunde ${customerName} die Telefonnummer ${updatedPhone} und die Mailadresse ${updatedEmail}.`;
+
+      const result = await brainAgent.process({
+        chatId: `ai-customer-update-${suffix}`,
+        text: prompt,
+        brainContext: {
+          locale: "de-DE",
+          timezone: "Europe/Berlin",
+        },
+        debug: true,
+      });
+
+      expect(result.toolNames ?? []).toContain("customer_update");
+      expect(result.finalOutput).toMatch(/kunde|aktualisiert/i);
+      expect(result.finalOutput).toMatch(/telefon|mail|email|geaendert/i);
+
+      const { data: updatedCustomer } = await supabase
+        .from("customers")
+        .select("*")
+        .eq("id", customer.id)
+        .single();
+      if (!updatedCustomer) throw new Error("Could not reload updated customer");
+
+      expect(updatedCustomer.phone).toBe(updatedPhone);
+      expect(updatedCustomer.email).toBe(updatedEmail);
+    } finally {
+      await cleanupTestRecords(ids);
+    }
+  }, 60000);
+});
+
+describe("AI integration: job_update (skipped by default)", () => {
+  it.skip("updates the status for a clearly identified job", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const ids: TestRecordIds = {
+      employeeIds: [],
+      customerIds: [],
+      jobIds: [],
+    };
+
+    const customerName = "Bernstein Projektbau GmbH";
+    const street = "Kastanienweg 5";
+
+    try {
+      const { data: customer } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-AI-${suffix}`,
+          company_name: customerName,
+          contact_name: customerName,
+        })
+        .select("*")
+        .single();
+      if (!customer) throw new Error("Customer setup failed");
+      ids.customerIds.push(customer.id);
+
+      const { data: job } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-AI-${suffix}`,
+          customer_id: customer.id,
+          status: "scheduled",
+          address: `${street}, Koeln`,
+          notes: "AI integration job update case",
+        })
+        .select("*")
+        .single();
+      if (!job) throw new Error("Job setup failed");
+      ids.jobIds.push(job.id);
+
+      const prompt = `Setze den Auftrag in der ${street} fuer Kunde ${customerName} auf erledigt.`;
+
+      const result = await brainAgent.process({
+        chatId: `ai-job-update-${suffix}`,
+        text: prompt,
+        brainContext: {
+          locale: "de-DE",
+          timezone: "Europe/Berlin",
+        },
+        debug: true,
+      });
+
+      expect(result.toolNames ?? []).toContain("job_update");
+      expect(result.finalOutput).toMatch(/auftrag|aktualisiert|erledigt/i);
+
+      const { data: updatedJob } = await supabase
+        .from("jobs")
+        .select("*")
+        .eq("id", job.id)
+        .single();
+      if (!updatedJob) throw new Error("Could not reload updated job");
+
+      expect(updatedJob.status).toBe("done");
+    } finally {
+      await cleanupTestRecords(ids);
+    }
+  }, 60000);
+});
+
 describe("AI integration: existing legacy scenarios (kept skipped)", () => {
   it.skip("processes an inbound message, executes customer lookup and returns a customer reply", async () => {
     const msg: NormalizedMessage = {

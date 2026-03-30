@@ -3,11 +3,13 @@ import dotenv from "dotenv";
 import { describe, expect, it } from "vitest";
 import { orderCreateTool } from "@/features/ai/tools/defs/order_create";
 import { jobCreateTool } from "@/features/ai/tools/defs/job_create";
+import { customerUpdateTool } from "@/features/ai/tools/defs/customer_update";
 import {
   JobDispatchSchema,
   jobDispatchTool,
 } from "@/features/ai/tools/defs/job_dispatch";
 import { jobLookupTool } from "@/features/ai/tools/defs/job_lookup";
+import { jobUpdateTool } from "@/features/ai/tools/defs/job_update";
 import { noteCreateTool } from "@/features/ai/tools/defs/note_create";
 import { getSupabaseServer } from "@/services/supabase/server";
 
@@ -258,6 +260,131 @@ describe("job_create integration", () => {
         createdCustomerId,
         customerWasCreated,
       );
+    }
+  });
+});
+
+describe("customer_update integration", () => {
+  it("updates a uniquely resolved customer and appends a timestamped note", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const customerName = `Kupferstern Ausbau GmbH ${suffix}`;
+    let customerId: string | null = null;
+
+    try {
+      const { data: customer, error: customerError } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-IT-${suffix}`,
+          company_name: customerName,
+          contact_name: "Mira Sonnberg",
+          phone: "030123456",
+          notes: "Bestehende Kundennotiz",
+        })
+        .select("*")
+        .single();
+
+      if (customerError || !customer) {
+        throw new Error(customerError?.message ?? "Customer setup failed");
+      }
+      customerId = customer.id;
+
+      const result = await customerUpdateTool.execute(
+        {
+          customerIdentifier: customerName,
+          phone: "01701234567",
+          email: "mira@kupferstern.test",
+          city: "Koeln",
+          note: "Telefonnummer aktualisiert.",
+        },
+        testCtx as any,
+        true,
+      );
+
+      expect(result.ok).toBe(true);
+
+      if (!result.ok) {
+        throw new Error(`Expected success, got: ${result.message}`);
+      }
+
+      expect(result.updatedFields).toEqual(
+        expect.arrayContaining(["phone", "email", "city", "note"]),
+      );
+      expect(result.customer.phone).toBe("01701234567");
+      expect(result.customer.email).toBe("mira@kupferstern.test");
+      expect(result.customer.city).toBe("Koeln");
+      expect(result.customer.notes).toContain("Bestehende Kundennotiz");
+      expect(result.customer.notes).toContain("Telefonnummer aktualisiert.");
+    } finally {
+      await cleanupCustomer(customerId);
+    }
+  });
+
+  it("returns follow-up when multiple customers match the update target", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const sharedName = `Sonnenhang Bau GmbH ${suffix}`;
+    const customerIds: string[] = [];
+
+    try {
+      const { data: firstCustomer, error: firstCustomerError } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-IT-${suffix}-A`,
+          company_name: sharedName,
+          contact_name: sharedName,
+          street: "Nordufer 1",
+          city: "Koeln",
+        })
+        .select("*")
+        .single();
+
+      if (firstCustomerError || !firstCustomer) {
+        throw new Error(firstCustomerError?.message ?? "First customer setup failed");
+      }
+      customerIds.push(firstCustomer.id);
+
+      const { data: secondCustomer, error: secondCustomerError } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-IT-${suffix}-B`,
+          company_name: sharedName,
+          contact_name: sharedName,
+          street: "Suedufer 2",
+          city: "Bonn",
+        })
+        .select("*")
+        .single();
+
+      if (secondCustomerError || !secondCustomer) {
+        throw new Error(
+          secondCustomerError?.message ?? "Second customer setup failed",
+        );
+      }
+      customerIds.push(secondCustomer.id);
+
+      const result = await customerUpdateTool.execute(
+        {
+          customerIdentifier: sharedName,
+          phone: "01510000000",
+        },
+        testCtx as any,
+        true,
+      );
+
+      expect(result.ok).toBe(false);
+
+      if (result.ok) {
+        throw new Error("Expected follow-up result");
+      }
+
+      expect(result.code).toBe("FOLLOW_UP_REQUIRED");
+      expect(result.message).toMatch(/mehrere|welchen|genau/i);
+      expect(result.options ?? []).toHaveLength(2);
+    } finally {
+      if (customerIds.length > 0) {
+        await supabase.from("customers").delete().in("id", customerIds);
+      }
     }
   });
 });
@@ -814,6 +941,175 @@ describe("job_dispatch integration", () => {
     } finally {
       if (employeeId) {
         await supabase.from("employees").delete().eq("id", employeeId);
+      }
+    }
+  });
+});
+
+describe("job_update integration", () => {
+  it("updates address and schedule for a uniquely resolved job", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const customerName = `Bernstein Projektbau GmbH ${suffix}`;
+    const streetName = `Kastanienweg ${suffix}`;
+    const houseNumber = "5";
+    let customerId: string | null = null;
+    let jobId: string | null = null;
+
+    try {
+      const { data: customer, error: customerError } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-IT-${suffix}`,
+          company_name: customerName,
+          contact_name: customerName,
+        })
+        .select("*")
+        .single();
+
+      if (customerError || !customer) {
+        throw new Error(customerError?.message ?? "Customer setup failed");
+      }
+      customerId = customer.id;
+
+      const { data: job, error: jobError } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-IT-${suffix}`,
+          customer_id: customer.id,
+          status: "new",
+          address: `${streetName} ${houseNumber}, Koeln`,
+        })
+        .select("*")
+        .single();
+
+      if (jobError || !job) {
+        throw new Error(jobError?.message ?? "Job setup failed");
+      }
+      jobId = job.id;
+
+      const result = await jobUpdateTool.execute(
+        {
+          companyName: customerName,
+          street: streetName,
+          houseNumber,
+          newAddress: "Neue Lindenallee 22, Bonn",
+          scheduledDate: "2026-04-10",
+        },
+        testCtx as any,
+        true,
+      );
+
+      expect(result.ok).toBe(true);
+
+      if (!result.ok) {
+        throw new Error(`Expected success, got: ${result.message}`);
+      }
+
+      expect(result.updatedFields).toEqual(
+        expect.arrayContaining(["address", "scheduledDate"]),
+      );
+      expect(result.job.address).toBe("Neue Lindenallee 22, Bonn");
+      expect(result.job.status).toBe("scheduled");
+      expect(result.job.scheduled_start).toMatch(/^2026-04-10T/);
+    } finally {
+      if (jobId) {
+        await supabase.from("jobs").delete().eq("id", jobId);
+      }
+      if (customerId) {
+        await supabase.from("customers").delete().eq("id", customerId);
+      }
+    }
+  });
+
+  it("returns follow-up when multiple jobs match the update target", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const customerName = `Bernstein Projektbau GmbH ${suffix}`;
+    const streetName = `Kastanienweg ${suffix}`;
+    const houseNumber = "5";
+    let customerId: string | null = null;
+    const jobIds: string[] = [];
+
+    try {
+      const { data: customer, error: customerError } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-IT-${suffix}`,
+          company_name: customerName,
+          contact_name: customerName,
+        })
+        .select("*")
+        .single();
+
+      if (customerError || !customer) {
+        throw new Error(customerError?.message ?? "Customer setup failed");
+      }
+      customerId = customer.id;
+
+      const { data: firstJob, error: firstJobError } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-IT-${suffix}-A`,
+          customer_id: customer.id,
+          status: "new",
+          address: `${streetName} ${houseNumber} Nord, Koeln`,
+        })
+        .select("*")
+        .single();
+
+      if (firstJobError || !firstJob) {
+        throw new Error(firstJobError?.message ?? "First job setup failed");
+      }
+      jobIds.push(firstJob.id);
+
+      const { data: secondJob, error: secondJobError } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-IT-${suffix}-B`,
+          customer_id: customer.id,
+          status: "new",
+          address: `${streetName} ${houseNumber} Sued, Koeln`,
+        })
+        .select("*")
+        .single();
+
+      if (secondJobError || !secondJob) {
+        throw new Error(secondJobError?.message ?? "Second job setup failed");
+      }
+      jobIds.push(secondJob.id);
+
+      const result = await jobUpdateTool.execute(
+        {
+          companyName: customerName,
+          street: streetName,
+          houseNumber,
+          status: "done",
+        },
+        testCtx as any,
+        true,
+      );
+
+      expect(result.ok).toBe(false);
+
+      if (result.ok) {
+        throw new Error("Expected follow-up result");
+      }
+
+      expect(result.code).toBe("FOLLOW_UP_REQUIRED");
+      expect(result.message).toMatch(/mehrere|welchen|genau/i);
+      expect(result.options ?? []).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining(firstJob.job_number),
+          expect.stringContaining(secondJob.job_number),
+        ]),
+      );
+    } finally {
+      if (jobIds.length > 0) {
+        await supabase.from("jobs").delete().in("id", jobIds);
+      }
+      if (customerId) {
+        await supabase.from("customers").delete().eq("id", customerId);
       }
     }
   });

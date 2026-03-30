@@ -7,6 +7,8 @@ import {
   CustomerCreateResult,
   CustomerLookupArgs,
   CustomerLookupResult,
+  CustomerUpdateArgs,
+  CustomerUpdateResult,
   Job,
   JobDispatchArgs,
   JobDispatchResult,
@@ -14,6 +16,8 @@ import {
   JobLookupResult,
   JobCreateArgs,
   JobCreateResult,
+  JobUpdateArgs,
+  JobUpdateResult,
   NoteCreateArgs,
   NoteCreateResult,
   Order,
@@ -125,6 +129,13 @@ type ResolveResult<T, TFailureResult> =
 type EmployeeResolveFailure = {
   ok: false;
   code: "FOLLOW_UP_REQUIRED" | "EMPLOYEE_LOOKUP_FAILED";
+  message: string;
+  options?: string[];
+};
+
+type CustomerResolveFailure = {
+  ok: false;
+  code: "FOLLOW_UP_REQUIRED" | "CUSTOMER_LOOKUP_FAILED";
   message: string;
   options?: string[];
 };
@@ -344,6 +355,193 @@ function exactCustomerMatch(
     customer.company_name,
     customer.contact_name,
   ].some((value) => normalizeLoose(value) === normalizedIdentifier);
+}
+
+function buildDetailedCustomerLabel(customer: {
+  customer_number: string;
+  company_name: string;
+  contact_name: string | null;
+  street?: string | null;
+  city?: string | null;
+}): string {
+  const name = customer.company_name?.trim() || customer.contact_name?.trim();
+  const address = [customer.street?.trim(), customer.city?.trim()]
+    .filter((part): part is string => Boolean(part))
+    .join(", ");
+
+  const base = name
+    ? `${name} (${customer.customer_number})`
+    : customer.customer_number;
+
+  return address ? `${base}, ${address}` : base;
+}
+
+async function resolveCustomerReference(
+  supabase: ReturnType<typeof getSupabaseServer>,
+  criteria: {
+    customerIdentifier: string | null;
+  },
+  debug: boolean,
+): Promise<ResolveResult<CustomerRow, CustomerResolveFailure>> {
+  if (!criteria.customerIdentifier) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message:
+          "Bitte nenne den Kunden genauer, zum Beispiel mit Kundennummer oder Namen.",
+      },
+    };
+  }
+
+  const { data: customerMatches, error: customerLookupError } = await supabase
+    .from("customers")
+    .select("*")
+    .or(
+      [
+        `customer_number.ilike.%${criteria.customerIdentifier}%`,
+        `company_name.ilike.%${criteria.customerIdentifier}%`,
+        `contact_name.ilike.%${criteria.customerIdentifier}%`,
+      ].join(","),
+    )
+    .limit(20);
+
+  if (debug) {
+    console.log("Customer Reference Lookup:", customerMatches);
+    console.log("Customer Reference Lookup Error:", customerLookupError);
+  }
+
+  if (customerLookupError) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "CUSTOMER_LOOKUP_FAILED",
+        message: customerLookupError.message,
+      },
+    };
+  }
+
+  let resolvedCustomerMatches = (customerMatches ?? []) as CustomerRow[];
+
+  if (resolvedCustomerMatches.length === 0) {
+    const { data: fallbackCustomers, error: fallbackCustomersError } = await supabase
+      .from("customers")
+      .select("*")
+      .limit(100);
+
+    if (fallbackCustomersError) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          code: "CUSTOMER_LOOKUP_FAILED",
+          message: fallbackCustomersError.message,
+        },
+      };
+    }
+
+    const normalizedIdentifier = normalizeLoose(criteria.customerIdentifier);
+    resolvedCustomerMatches = (fallbackCustomers ?? []).filter((customer) => {
+      const haystacks = [
+        customer.customer_number,
+        customer.company_name,
+        customer.contact_name,
+      ];
+
+      return haystacks.some((value) =>
+        normalizeLoose(value).includes(normalizedIdentifier),
+      );
+    }) as CustomerRow[];
+  }
+
+  if (resolvedCustomerMatches.length === 0) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message: "Ich konnte keinen passenden Kunden finden.",
+      },
+    };
+  }
+
+  const exactMatches = resolvedCustomerMatches.filter((customer) =>
+    exactCustomerMatch(customer, criteria.customerIdentifier as string),
+  );
+
+  if (exactMatches.length === 1) {
+    return {
+      ok: true,
+      value: exactMatches[0] as CustomerRow,
+    };
+  }
+
+  const scopedMatches =
+    exactMatches.length > 1 ? exactMatches : resolvedCustomerMatches;
+
+  if (scopedMatches.length > 1) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message: "Ich habe mehrere passende Kunden gefunden. Welchen meinst du genau?",
+        options: scopedMatches.map((customer) =>
+          buildDetailedCustomerLabel(customer as CustomerRow),
+        ),
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    value: scopedMatches[0] as CustomerRow,
+  };
+}
+
+function buildScheduledWindowForDate(
+  dateString: string,
+  currentJob: Pick<Job, "scheduled_start" | "scheduled_end">,
+): {
+  scheduled_start: string;
+  scheduled_end: string | null;
+} {
+  const start = new Date(`${dateString}T00:00:00.000Z`);
+  const currentStart = currentJob.scheduled_start
+    ? new Date(currentJob.scheduled_start)
+    : null;
+  const currentEnd = currentJob.scheduled_end
+    ? new Date(currentJob.scheduled_end)
+    : null;
+
+  if (currentStart) {
+    start.setUTCHours(
+      currentStart.getUTCHours(),
+      currentStart.getUTCMinutes(),
+      currentStart.getUTCSeconds(),
+      currentStart.getUTCMilliseconds(),
+    );
+  } else {
+    start.setUTCHours(8, 0, 0, 0);
+  }
+
+  let scheduledEnd: string | null = null;
+
+  if (
+    currentStart &&
+    currentEnd &&
+    currentEnd.getTime() > currentStart.getTime()
+  ) {
+    const durationMs = currentEnd.getTime() - currentStart.getTime();
+    scheduledEnd = new Date(start.getTime() + durationMs).toISOString();
+  }
+
+  return {
+    scheduled_start: start.toISOString(),
+    scheduled_end: scheduledEnd,
+  };
 }
 
 async function resolveEmployee(
@@ -901,6 +1099,116 @@ export const supabaseBusinessProvider: BusinessProvider = {
     };
   },
 
+  async customerUpdate(
+    args: CustomerUpdateArgs,
+    debug: boolean = false,
+  ): Promise<CustomerUpdateResult> {
+    const supabase = getSupabaseServer();
+    const customerIdentifier =
+      (args.customerIdentifier ?? args.customerName ?? args.companyName)?.trim() ||
+      null;
+    const newCompanyName = args.newCompanyName?.trim() || null;
+    const contactName = args.contactName?.trim() || null;
+    const phone = args.phone?.trim() || null;
+    const email = args.email?.trim() || null;
+    const street = args.street?.trim() || null;
+    const city = args.city?.trim() || null;
+    const postalCode = args.postalCode?.trim() || null;
+    const note = args.note?.trim() || null;
+
+    const updatedFields: string[] = [];
+
+    if (newCompanyName) updatedFields.push("companyName");
+    if (contactName) updatedFields.push("contactName");
+    if (phone) updatedFields.push("phone");
+    if (email) updatedFields.push("email");
+    if (street) updatedFields.push("street");
+    if (city) updatedFields.push("city");
+    if (postalCode) updatedFields.push("postalCode");
+    if (note) updatedFields.push("note");
+
+    if (!customerIdentifier) {
+      return {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message:
+          "Bitte nenne den Kunden, den ich aktualisieren soll, zum Beispiel mit Name oder Kundennummer.",
+      };
+    }
+
+    if (updatedFields.length === 0) {
+      return {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message:
+          "Bitte nenne mindestens ein Feld, das ich beim Kunden ändern soll.",
+      };
+    }
+
+    if (debug) {
+      console.log("Customer Update Criteria:", {
+        customerIdentifier,
+        updatedFields,
+      });
+    }
+
+    const customerResolution = await resolveCustomerReference(
+      supabase,
+      {
+        customerIdentifier,
+      },
+      debug,
+    );
+    if (!customerResolution.ok) {
+      return customerResolution.result;
+    }
+
+    const resolvedCustomer = customerResolution.value;
+    const notes = note
+      ? resolvedCustomer.notes?.trim()
+        ? `${resolvedCustomer.notes.trim()}\n${buildTimestampedNote(note)}`
+        : buildTimestampedNote(note)
+      : resolvedCustomer.notes;
+
+    const updatePayload = {
+      company_name: newCompanyName ?? resolvedCustomer.company_name,
+      contact_name: contactName ?? resolvedCustomer.contact_name,
+      phone: phone ?? resolvedCustomer.phone,
+      email: email ?? resolvedCustomer.email,
+      street: street ?? resolvedCustomer.street,
+      city: city ?? resolvedCustomer.city,
+      postal_code: postalCode ?? resolvedCustomer.postal_code,
+      notes,
+    };
+
+    const { data: updatedCustomer, error: updateError } = await supabase
+      .from("customers")
+      .update(updatePayload)
+      .eq("id", resolvedCustomer.id)
+      .select("*")
+      .single();
+
+    if (debug) {
+      console.log("Customer Update Result:", updatedCustomer);
+      console.log("Customer Update Error:", updateError);
+    }
+
+    if (updateError || !updatedCustomer) {
+      return {
+        ok: false,
+        code: "CUSTOMER_UPDATE_FAILED",
+        message: updateError?.message ?? "Kunde konnte nicht aktualisiert werden.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: `Kunde ${updatedCustomer.customer_number} wurde aktualisiert.`,
+      customer: mapCustomer(updatedCustomer as CustomerRow),
+      updatedFields,
+    };
+  },
+
   async orderCreate(
     args: OrderCreateArgs,
     debug: boolean = false,
@@ -1253,6 +1561,94 @@ export const supabaseBusinessProvider: BusinessProvider = {
       message: `Auftrag ${dispatchedJob.job_number} wurde ${resolvedEmployee.full_name} zugewiesen.`,
       job: dispatchedJob as Job,
       employee: mapEmployee(resolvedEmployee),
+    };
+  },
+
+  async jobUpdate(
+    args: JobUpdateArgs,
+    debug: boolean = false,
+  ): Promise<JobUpdateResult> {
+    const supabase = getSupabaseServer();
+    const jobReferenceCriteria = extractJobReferenceCriteria(args);
+    const newAddress = args.newAddress?.trim() || null;
+    const scheduledDate = args.scheduledDate?.trim() || null;
+    const status = args.status?.trim() || null;
+
+    const updatedFields: string[] = [];
+    if (newAddress) updatedFields.push("address");
+    if (scheduledDate) updatedFields.push("scheduledDate");
+    if (status) updatedFields.push("status");
+
+    if (updatedFields.length === 0) {
+      return {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message:
+          "Bitte nenne mindestens ein Feld, das ich beim Auftrag ändern soll.",
+      };
+    }
+
+    if (debug) {
+      console.log("Job Update Criteria:", {
+        ...jobReferenceCriteria,
+        newAddress,
+        scheduledDate,
+        status,
+      });
+    }
+
+    const jobResolution = await resolveJobReference(
+      supabase,
+      jobReferenceCriteria,
+      debug,
+    );
+    if (!jobResolution.ok) {
+      return jobResolution.result;
+    }
+
+    const resolvedJob = jobResolution.value;
+    const scheduledWindow = scheduledDate
+      ? buildScheduledWindowForDate(scheduledDate, resolvedJob)
+      : null;
+
+    const nextStatus =
+      status ?? (scheduledDate && resolvedJob.status === "new"
+        ? "scheduled"
+        : resolvedJob.status);
+
+    const updatePayload = {
+      address: newAddress ?? resolvedJob.address,
+      status: nextStatus,
+      scheduled_start:
+        scheduledWindow?.scheduled_start ?? resolvedJob.scheduled_start,
+      scheduled_end: scheduledWindow?.scheduled_end ?? resolvedJob.scheduled_end,
+    };
+
+    const { data: updatedJob, error: updateError } = await supabase
+      .from("jobs")
+      .update(updatePayload)
+      .eq("id", resolvedJob.id)
+      .select("*")
+      .single();
+
+    if (debug) {
+      console.log("Job Update Result:", updatedJob);
+      console.log("Job Update Error:", updateError);
+    }
+
+    if (updateError || !updatedJob) {
+      return {
+        ok: false,
+        code: "JOB_UPDATE_FAILED",
+        message: updateError?.message ?? "Auftrag konnte nicht aktualisiert werden.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: `Auftrag ${updatedJob.job_number} wurde aktualisiert.`,
+      job: updatedJob as Job,
+      updatedFields,
     };
   },
 
