@@ -74,12 +74,53 @@ function buildPendingAwareText(
     pending.options.length > 0
       ? `Offene Optionen: ${pending.options.join(" | ")}`
       : "Offene Optionen: keine expliziten Optionen";
+  const selectedOption = inferSelectedOption(text, pending.options);
 
   return [
     "Kontext aus der vorherigen Rueckfrage. Nutze ihn nur, wenn die aktuelle Nachricht darauf antwortet.",
+    "Wenn die aktuelle Nutzerantwort eine Auswahl aus den offenen Optionen trifft, fuehre bevorzugt dasselbe Tool erneut aus.",
     `Offenes Tool: ${pending.toolName}`,
     `Vorherige Rueckfrage: ${pending.message}`,
     optionLines,
+    ...(selectedOption
+      ? [`Erkannte Auswahl aus den offenen Optionen: ${selectedOption}`]
+      : []),
     `Aktuelle Nutzerantwort: ${text}`,
   ].join("\n");
+}
+
+function inferSelectedOption(text: string, options: string[]): string | null {
+  const normalizedText = normalizeSelectionText(text);
+  if (!normalizedText || options.length === 0) {
+    return null;
+  }
+
+  const matchingOptions = options.filter((option) => {
+    const normalizedOption = normalizeSelectionText(option);
+    if (!normalizedOption) {
+      return false;
+    }
+
+    if (
+      normalizedOption.includes(normalizedText) ||
+      normalizedText.includes(normalizedOption)
+    ) {
+      return true;
+    }
+
+    const optionIds = option.match(/[A-Za-z]+-[A-Za-z0-9-]+/g) ?? [];
+    return optionIds.some((id) =>
+      normalizedText.includes(normalizeSelectionText(id)),
+    );
+  });
+
+  return matchingOptions.length === 1 ? matchingOptions[0] : null;
+}
+
+function normalizeSelectionText(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[.,!?]/g, " ")
+    .replace(/\s+/g, " ");
 }

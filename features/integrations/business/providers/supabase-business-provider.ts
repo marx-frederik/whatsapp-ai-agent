@@ -10,6 +10,8 @@ import {
   CustomerUpdateArgs,
   CustomerUpdateResult,
   Job,
+  JobCompleteArgs,
+  JobCompleteResult,
   JobDispatchArgs,
   JobDispatchResult,
   JobLookupArgs,
@@ -159,6 +161,12 @@ type JobReferenceCriteria = {
   street: string | null;
   houseNumber: string | null;
   hasAddressCriteria: boolean;
+};
+
+type CustomerLookupCriteria = {
+  customerIdentifier: string | null;
+  phone: string | null;
+  email: string | null;
 };
 
 function normalizeSearchText(value?: string | null): string {
@@ -376,6 +384,103 @@ function buildDetailedCustomerLabel(customer: {
   return address ? `${base}, ${address}` : base;
 }
 
+async function findCustomerCandidates(
+  supabase: ReturnType<typeof getSupabaseServer>,
+  criteria: CustomerLookupCriteria,
+  debugLabel: string,
+  debug: boolean,
+): Promise<ResolveResult<CustomerRow[], CustomerResolveFailure>> {
+  let query = supabase.from("customers").select("*");
+
+  if (criteria.phone) {
+    query = query.ilike("phone", `%${criteria.phone}%`);
+  }
+
+  if (criteria.email) {
+    query = query.ilike("email", `%${criteria.email}%`);
+  }
+
+  if (criteria.customerIdentifier) {
+    query = query.or(
+      [
+        `customer_number.ilike.%${criteria.customerIdentifier}%`,
+        `company_name.ilike.%${criteria.customerIdentifier}%`,
+        `contact_name.ilike.%${criteria.customerIdentifier}%`,
+      ].join(","),
+    );
+  }
+
+  const { data: directMatches, error: lookupError } = await query.limit(20);
+
+  if (debug) {
+    console.log(`${debugLabel}:`, directMatches);
+    console.log(`${debugLabel} Error:`, lookupError);
+  }
+
+  if (lookupError) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "CUSTOMER_LOOKUP_FAILED",
+        message: lookupError.message,
+      },
+    };
+  }
+
+  let resolvedMatches = (directMatches ?? []) as CustomerRow[];
+
+  if (resolvedMatches.length === 0 && criteria.customerIdentifier) {
+    const { data: fallbackCustomers, error: fallbackCustomersError } = await supabase
+      .from("customers")
+      .select("*")
+      .limit(100);
+
+    if (fallbackCustomersError) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          code: "CUSTOMER_LOOKUP_FAILED",
+          message: fallbackCustomersError.message,
+        },
+      };
+    }
+
+    const normalizedIdentifier = normalizeLoose(criteria.customerIdentifier);
+    resolvedMatches = (fallbackCustomers ?? []).filter((customer) => {
+      const haystacks = [
+        customer.customer_number,
+        customer.company_name,
+        customer.contact_name,
+      ];
+
+      return haystacks.some((value) =>
+        normalizeLoose(value).includes(normalizedIdentifier),
+      );
+    }) as CustomerRow[];
+  }
+
+  if (resolvedMatches.length > 1 && criteria.phone) {
+    const normalizedPhoneSearch = normalizePhone(criteria.phone);
+    resolvedMatches = resolvedMatches.filter(
+      (customer) => normalizePhone(customer.phone) === normalizedPhoneSearch,
+    );
+  }
+
+  if (resolvedMatches.length > 1 && criteria.email) {
+    const normalizedEmailSearch = normalize(criteria.email);
+    resolvedMatches = resolvedMatches.filter(
+      (customer) => normalize(customer.email) === normalizedEmailSearch,
+    );
+  }
+
+  return {
+    ok: true,
+    value: resolvedMatches,
+  };
+}
+
 async function resolveCustomerReference(
   supabase: ReturnType<typeof getSupabaseServer>,
   criteria: {
@@ -395,66 +500,21 @@ async function resolveCustomerReference(
     };
   }
 
-  const { data: customerMatches, error: customerLookupError } = await supabase
-    .from("customers")
-    .select("*")
-    .or(
-      [
-        `customer_number.ilike.%${criteria.customerIdentifier}%`,
-        `company_name.ilike.%${criteria.customerIdentifier}%`,
-        `contact_name.ilike.%${criteria.customerIdentifier}%`,
-      ].join(","),
-    )
-    .limit(20);
-
-  if (debug) {
-    console.log("Customer Reference Lookup:", customerMatches);
-    console.log("Customer Reference Lookup Error:", customerLookupError);
+  const customerLookup = await findCustomerCandidates(
+    supabase,
+    {
+      customerIdentifier: criteria.customerIdentifier,
+      phone: null,
+      email: null,
+    },
+    "Customer Reference Lookup",
+    debug,
+  );
+  if (!customerLookup.ok) {
+    return customerLookup;
   }
 
-  if (customerLookupError) {
-    return {
-      ok: false,
-      result: {
-        ok: false,
-        code: "CUSTOMER_LOOKUP_FAILED",
-        message: customerLookupError.message,
-      },
-    };
-  }
-
-  let resolvedCustomerMatches = (customerMatches ?? []) as CustomerRow[];
-
-  if (resolvedCustomerMatches.length === 0) {
-    const { data: fallbackCustomers, error: fallbackCustomersError } = await supabase
-      .from("customers")
-      .select("*")
-      .limit(100);
-
-    if (fallbackCustomersError) {
-      return {
-        ok: false,
-        result: {
-          ok: false,
-          code: "CUSTOMER_LOOKUP_FAILED",
-          message: fallbackCustomersError.message,
-        },
-      };
-    }
-
-    const normalizedIdentifier = normalizeLoose(criteria.customerIdentifier);
-    resolvedCustomerMatches = (fallbackCustomers ?? []).filter((customer) => {
-      const haystacks = [
-        customer.customer_number,
-        customer.company_name,
-        customer.contact_name,
-      ];
-
-      return haystacks.some((value) =>
-        normalizeLoose(value).includes(normalizedIdentifier),
-      );
-    }) as CustomerRow[];
-  }
+  const resolvedCustomerMatches = customerLookup.value;
 
   if (resolvedCustomerMatches.length === 0) {
     return {
@@ -502,13 +562,23 @@ async function resolveCustomerReference(
 }
 
 function buildScheduledWindowForDate(
-  dateString: string,
+  input: {
+    scheduledDate: string | null;
+    scheduledTime: string | null;
+    scheduledEndTime: string | null;
+  },
   currentJob: Pick<Job, "scheduled_start" | "scheduled_end">,
-): {
-  scheduled_start: string;
-  scheduled_end: string | null;
-} {
-  const start = new Date(`${dateString}T00:00:00.000Z`);
+): ResolveResult<
+  {
+    scheduled_start: string;
+    scheduled_end: string | null;
+  },
+  {
+    ok: false;
+    code: "FOLLOW_UP_REQUIRED";
+    message: string;
+  }
+> {
   const currentStart = currentJob.scheduled_start
     ? new Date(currentJob.scheduled_start)
     : null;
@@ -516,7 +586,42 @@ function buildScheduledWindowForDate(
     ? new Date(currentJob.scheduled_end)
     : null;
 
-  if (currentStart) {
+  const baseDate = input.scheduledDate
+    ? new Date(`${input.scheduledDate}T00:00:00.000Z`)
+    : currentStart
+      ? new Date(currentStart)
+      : null;
+
+  if (!baseDate && (input.scheduledTime || input.scheduledEndTime)) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message:
+          "Fuer eine neue Uhrzeit brauche ich auch ein Datum oder einen bereits geplanten Termin.",
+      },
+    };
+  }
+
+  if (!baseDate && !input.scheduledDate) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message:
+          "Bitte nenne fuer die Terminplanung mindestens ein Datum.",
+      },
+    };
+  }
+
+  const start = baseDate as Date;
+
+  if (input.scheduledTime) {
+    const [hours, minutes] = input.scheduledTime.split(":").map(Number);
+    start.setUTCHours(hours, minutes, 0, 0);
+  } else if (currentStart) {
     start.setUTCHours(
       currentStart.getUTCHours(),
       currentStart.getUTCMinutes(),
@@ -529,7 +634,25 @@ function buildScheduledWindowForDate(
 
   let scheduledEnd: string | null = null;
 
-  if (
+  if (input.scheduledEndTime) {
+    const [endHours, endMinutes] = input.scheduledEndTime.split(":").map(Number);
+    const end = new Date(start);
+    end.setUTCHours(endHours, endMinutes, 0, 0);
+
+    if (end.getTime() <= start.getTime()) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          code: "FOLLOW_UP_REQUIRED",
+          message:
+            "Die Endzeit muss nach der Startzeit liegen. Bitte nenne eine passende Uhrzeit.",
+        },
+      };
+    }
+
+    scheduledEnd = end.toISOString();
+  } else if (
     currentStart &&
     currentEnd &&
     currentEnd.getTime() > currentStart.getTime()
@@ -539,9 +662,31 @@ function buildScheduledWindowForDate(
   }
 
   return {
-    scheduled_start: start.toISOString(),
-    scheduled_end: scheduledEnd,
+    ok: true,
+    value: {
+      scheduled_start: start.toISOString(),
+      scheduled_end: scheduledEnd,
+    },
   };
+}
+
+function validateJobStatusTransition(
+  currentStatus: string,
+  nextStatus: string,
+): string | null {
+  const allowedTransitions: Record<string, string[]> = {
+    new: ["new", "scheduled", "done", "cancelled"],
+    scheduled: ["scheduled", "done", "cancelled"],
+    done: ["done"],
+    cancelled: ["cancelled"],
+  };
+
+  const allowedTargets = allowedTransitions[currentStatus] ?? [currentStatus];
+  if (allowedTargets.includes(nextStatus)) {
+    return null;
+  }
+
+  return `Der Statuswechsel von ${currentStatus} nach ${nextStatus} ist nicht erlaubt.`;
 }
 
 async function resolveEmployee(
@@ -949,44 +1094,43 @@ export const supabaseBusinessProvider: BusinessProvider = {
   ): Promise<CustomerLookupResult> {
     const supabaseServer = getSupabaseServer();
 
-    const name = args.customerIdentifier?.trim();
-    const phone = args.phone?.trim();
-    const email = args.email?.trim();
+    const customerIdentifier = args.customerIdentifier?.trim() || null;
+    const phone = args.phone?.trim() || null;
+    const email = args.email?.trim() || null;
 
-    let query = supabaseServer.from("customers").select("*");
-
-    if (phone) {
-      query = query.ilike("phone", `%${phone}%`);
-    }
-
-    if (email) {
-      query = query.ilike("email", `%${email}%`);
-    }
-
-    // customer_name = OR innerhalb des Felds
-    // also company_name ODER contact_name
-    if (name) {
-      query = query.or(
-        [`company_name.ilike.%${name}%`, `contact_name.ilike.%${name}%`].join(
-          ",",
-        ),
-      );
-    }
-
-    const { data, error } = await query;
-
-    if (debug) {
-      console.log("Data:", data);
-      console.log("Error:", error);
-    }
-
-    if (error) {
+    if (!customerIdentifier && !phone && !email) {
       return {
         ok: false,
-        code: "CUSTOMER_LOOKUP_FAILED",
-        message: error.message,
+        code: "FOLLOW_UP_REQUIRED",
+        message:
+          "Bitte nenne fuer die Kundensuche mindestens Namen, Kundennummer, Telefon oder E-Mail.",
       };
     }
+
+    const customerLookup = await findCustomerCandidates(
+      supabaseServer,
+      {
+        customerIdentifier,
+        phone,
+        email,
+      },
+      "Customer Lookup",
+      debug,
+    );
+    if (!customerLookup.ok) {
+      return customerLookup.result;
+    }
+
+    const data = customerLookup.value;
+
+    if ((data ?? []).length === 0) {
+      return {
+        ok: false,
+        code: "FOLLOW_UP_REQUIRED",
+        message: "Ich konnte keinen passenden Kunden finden.",
+      };
+    }
+
     return {
       ok: true,
       customers: (data ?? []).map(mapCustomer),
@@ -1564,6 +1708,76 @@ export const supabaseBusinessProvider: BusinessProvider = {
     };
   },
 
+  async jobComplete(
+    args: JobCompleteArgs,
+    debug: boolean = false,
+  ): Promise<JobCompleteResult> {
+    const supabase = getSupabaseServer();
+    const jobReferenceCriteria = extractJobReferenceCriteria(args);
+
+    if (debug) {
+      console.log("Job Complete Criteria:", jobReferenceCriteria);
+    }
+
+    const jobResolution = await resolveJobReference(
+      supabase,
+      jobReferenceCriteria,
+      debug,
+    );
+    if (!jobResolution.ok) {
+      return jobResolution.result;
+    }
+
+    const resolvedJob = jobResolution.value;
+
+    if (resolvedJob.status === "done") {
+      return {
+        ok: true,
+        message: `Auftrag ${resolvedJob.job_number} ist bereits erledigt.`,
+        job: resolvedJob,
+      };
+    }
+
+    if (resolvedJob.status === "cancelled") {
+      return {
+        ok: false,
+        code: "JOB_COMPLETE_FAILED",
+        message:
+          "Ein stornierter Auftrag kann nicht direkt als erledigt markiert werden.",
+      };
+    }
+
+    const { data: completedJob, error: completeError } = await supabase
+      .from("jobs")
+      .update({
+        status: "done",
+        scheduled_end: resolvedJob.scheduled_end ?? new Date().toISOString(),
+      })
+      .eq("id", resolvedJob.id)
+      .select("*")
+      .single();
+
+    if (debug) {
+      console.log("Job Complete Result:", completedJob);
+      console.log("Job Complete Error:", completeError);
+    }
+
+    if (completeError || !completedJob) {
+      return {
+        ok: false,
+        code: "JOB_COMPLETE_FAILED",
+        message:
+          completeError?.message ?? "Auftrag konnte nicht als erledigt markiert werden.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: `Auftrag ${completedJob.job_number} wurde als erledigt markiert.`,
+      job: completedJob as Job,
+    };
+  },
+
   async jobUpdate(
     args: JobUpdateArgs,
     debug: boolean = false,
@@ -1572,11 +1786,15 @@ export const supabaseBusinessProvider: BusinessProvider = {
     const jobReferenceCriteria = extractJobReferenceCriteria(args);
     const newAddress = args.newAddress?.trim() || null;
     const scheduledDate = args.scheduledDate?.trim() || null;
+    const scheduledTime = args.scheduledTime?.trim() || null;
+    const scheduledEndTime = args.scheduledEndTime?.trim() || null;
     const status = args.status?.trim() || null;
 
     const updatedFields: string[] = [];
     if (newAddress) updatedFields.push("address");
     if (scheduledDate) updatedFields.push("scheduledDate");
+    if (scheduledTime) updatedFields.push("scheduledTime");
+    if (scheduledEndTime) updatedFields.push("scheduledEndTime");
     if (status) updatedFields.push("status");
 
     if (updatedFields.length === 0) {
@@ -1593,6 +1811,8 @@ export const supabaseBusinessProvider: BusinessProvider = {
         ...jobReferenceCriteria,
         newAddress,
         scheduledDate,
+        scheduledTime,
+        scheduledEndTime,
         status,
       });
     }
@@ -1607,21 +1827,56 @@ export const supabaseBusinessProvider: BusinessProvider = {
     }
 
     const resolvedJob = jobResolution.value;
-    const scheduledWindow = scheduledDate
-      ? buildScheduledWindowForDate(scheduledDate, resolvedJob)
-      : null;
-
     const nextStatus =
-      status ?? (scheduledDate && resolvedJob.status === "new"
+      status ??
+      ((scheduledDate || scheduledTime || scheduledEndTime) &&
+      resolvedJob.status === "new"
         ? "scheduled"
         : resolvedJob.status);
+
+    const transitionError = validateJobStatusTransition(
+      resolvedJob.status,
+      nextStatus,
+    );
+    if (transitionError) {
+      return {
+        ok: false,
+        code: "JOB_UPDATE_FAILED",
+        message: transitionError,
+      };
+    }
+
+    const hasScheduleUpdate = Boolean(
+      scheduledDate || scheduledTime || scheduledEndTime,
+    );
+    const scheduledWindow = hasScheduleUpdate
+      ? buildScheduledWindowForDate(
+          {
+            scheduledDate,
+            scheduledTime,
+            scheduledEndTime,
+          },
+          resolvedJob,
+        )
+      : null;
+
+    if (scheduledWindow && !scheduledWindow.ok) {
+      return scheduledWindow.result;
+    }
 
     const updatePayload = {
       address: newAddress ?? resolvedJob.address,
       status: nextStatus,
       scheduled_start:
-        scheduledWindow?.scheduled_start ?? resolvedJob.scheduled_start,
-      scheduled_end: scheduledWindow?.scheduled_end ?? resolvedJob.scheduled_end,
+        nextStatus === "new"
+          ? null
+          : scheduledWindow?.value.scheduled_start ?? resolvedJob.scheduled_start,
+      scheduled_end:
+        nextStatus === "new"
+          ? null
+          : nextStatus === "done"
+            ? resolvedJob.scheduled_end ?? new Date().toISOString()
+            : scheduledWindow?.value.scheduled_end ?? resolvedJob.scheduled_end,
     };
 
     const { data: updatedJob, error: updateError } = await supabase

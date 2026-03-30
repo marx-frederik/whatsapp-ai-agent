@@ -1,5 +1,6 @@
 import { CustomerCreateSchema } from "@/features/ai/tools/defs/customer_create";
 import { CustomerUpdateSchema } from "@/features/ai/tools/defs/customer_update";
+import { JobCompleteSchema } from "@/features/ai/tools/defs/job_complete";
 import { JobDispatchSchema } from "@/features/ai/tools/defs/job_dispatch";
 import { JobLookupSchema } from "@/features/ai/tools/defs/job_lookup";
 import { JobUpdateSchema } from "@/features/ai/tools/defs/job_update";
@@ -31,8 +32,9 @@ export type CustomerLookupResult =
     }
   | {
       ok: false;
-      code: "CUSTOMER_LOOKUP_FAILED";
+      code: "FOLLOW_UP_REQUIRED" | "CUSTOMER_LOOKUP_FAILED";
       message: string;
+      options?: string[];
     };
 
 export type CustomerCreateArgs = z.infer<typeof CustomerCreateSchema>;
@@ -185,6 +187,24 @@ export type JobDispatchResult =
       options?: string[];
     };
 
+export type JobCompleteArgs = z.infer<typeof JobCompleteSchema>;
+
+export type JobCompleteResult =
+  | {
+      ok: true;
+      message: string;
+      job: Job;
+    }
+  | {
+      ok: false;
+      code:
+        | "FOLLOW_UP_REQUIRED"
+        | "JOB_LOOKUP_FAILED"
+        | "JOB_COMPLETE_FAILED";
+      message: string;
+      options?: string[];
+    };
+
 export type JobUpdateArgs = z.infer<typeof JobUpdateSchema>;
 
 export type JobUpdateResult =
@@ -256,6 +276,10 @@ export interface BusinessProvider {
     args: JobDispatchArgs,
     debug: boolean,
   ): Promise<JobDispatchResult>;
+  jobComplete(
+    args: JobCompleteArgs,
+    debug: boolean,
+  ): Promise<JobCompleteResult>;
   jobUpdate(args: JobUpdateArgs, debug: boolean): Promise<JobUpdateResult>;
   jobLookup(args: JobLookupArgs, debug: boolean): Promise<JobLookupResult>;
   noteCreate(args: NoteCreateArgs, debug: boolean): Promise<NoteCreateResult>;

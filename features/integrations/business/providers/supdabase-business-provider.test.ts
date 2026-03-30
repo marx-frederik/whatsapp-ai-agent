@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import { describe, expect, it } from "vitest";
 import { orderCreateTool } from "@/features/ai/tools/defs/order_create";
 import { jobCreateTool } from "@/features/ai/tools/defs/job_create";
+import { jobCompleteTool } from "@/features/ai/tools/defs/job_complete";
 import { customerUpdateTool } from "@/features/ai/tools/defs/customer_update";
 import {
   JobDispatchSchema,
@@ -96,6 +97,23 @@ describe("supabaseBusinessProvider.costumerLookup", () => {
     } finally {
       await cleanupCustomer(customerId);
     }
+  });
+
+  it("returns follow-up when no customer matches", async () => {
+    const { supabaseBusinessProvider } = await import("./supabase-business-provider");
+
+    const result = await supabaseBusinessProvider.customerLookup({
+      customerIdentifier: "KEIN_KUNDE_999999",
+    });
+
+    expect(result.ok).toBe(false);
+
+    if (result.ok) {
+      throw new Error("Expected follow-up result");
+    }
+
+    expect(result.code).toBe("FOLLOW_UP_REQUIRED");
+    expect(result.message).toMatch(/keinen passenden kunden/i);
   });
 });
 
@@ -995,6 +1013,8 @@ describe("job_update integration", () => {
           houseNumber,
           newAddress: "Neue Lindenallee 22, Bonn",
           scheduledDate: "2026-04-10",
+          scheduledTime: "09:30",
+          scheduledEndTime: "11:00",
         },
         testCtx as any,
         true,
@@ -1007,11 +1027,17 @@ describe("job_update integration", () => {
       }
 
       expect(result.updatedFields).toEqual(
-        expect.arrayContaining(["address", "scheduledDate"]),
+        expect.arrayContaining([
+          "address",
+          "scheduledDate",
+          "scheduledTime",
+          "scheduledEndTime",
+        ]),
       );
       expect(result.job.address).toBe("Neue Lindenallee 22, Bonn");
       expect(result.job.status).toBe("scheduled");
-      expect(result.job.scheduled_start).toMatch(/^2026-04-10T/);
+      expect(result.job.scheduled_start).toBe("2026-04-10T09:30:00.000Z");
+      expect(result.job.scheduled_end).toBe("2026-04-10T11:00:00.000Z");
     } finally {
       if (jobId) {
         await supabase.from("jobs").delete().eq("id", jobId);
@@ -1107,6 +1133,147 @@ describe("job_update integration", () => {
     } finally {
       if (jobIds.length > 0) {
         await supabase.from("jobs").delete().in("id", jobIds);
+      }
+      if (customerId) {
+        await supabase.from("customers").delete().eq("id", customerId);
+      }
+    }
+  });
+
+  it("rejects reopening a completed job via generic update", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const customerName = `Bernstein Projektbau GmbH ${suffix}`;
+    const streetName = `Kastanienweg ${suffix}`;
+    const houseNumber = "5";
+    let customerId: string | null = null;
+    let jobId: string | null = null;
+
+    try {
+      const { data: customer, error: customerError } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-IT-${suffix}`,
+          company_name: customerName,
+          contact_name: customerName,
+        })
+        .select("*")
+        .single();
+
+      if (customerError || !customer) {
+        throw new Error(customerError?.message ?? "Customer setup failed");
+      }
+      customerId = customer.id;
+
+      const { data: job, error: jobError } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-IT-${suffix}`,
+          customer_id: customer.id,
+          status: "done",
+          address: `${streetName} ${houseNumber}, Koeln`,
+        })
+        .select("*")
+        .single();
+
+      if (jobError || !job) {
+        throw new Error(jobError?.message ?? "Job setup failed");
+      }
+      jobId = job.id;
+
+      const result = await jobUpdateTool.execute(
+        {
+          companyName: customerName,
+          street: streetName,
+          houseNumber,
+          status: "scheduled",
+        },
+        testCtx as any,
+        true,
+      );
+
+      expect(result.ok).toBe(false);
+
+      if (result.ok) {
+        throw new Error("Expected guarded failure result");
+      }
+
+      expect(result.code).toBe("JOB_UPDATE_FAILED");
+      expect(result.message).toMatch(/nicht erlaubt/i);
+    } finally {
+      if (jobId) {
+        await supabase.from("jobs").delete().eq("id", jobId);
+      }
+      if (customerId) {
+        await supabase.from("customers").delete().eq("id", customerId);
+      }
+    }
+  });
+});
+
+describe("job_complete integration", () => {
+  it("marks a uniquely resolved job as done", async () => {
+    const supabase = getSupabaseServer();
+    const suffix = Date.now();
+    const customerName = `Kupferbogen Projekt GmbH ${suffix}`;
+    const streetName = `Lerchenpfad ${suffix}`;
+    const houseNumber = "8";
+    let customerId: string | null = null;
+    let jobId: string | null = null;
+
+    try {
+      const { data: customer, error: customerError } = await supabase
+        .from("customers")
+        .insert({
+          customer_number: `C-IT-${suffix}`,
+          company_name: customerName,
+          contact_name: customerName,
+        })
+        .select("*")
+        .single();
+
+      if (customerError || !customer) {
+        throw new Error(customerError?.message ?? "Customer setup failed");
+      }
+      customerId = customer.id;
+
+      const { data: job, error: jobError } = await supabase
+        .from("jobs")
+        .insert({
+          job_number: `J-IT-${suffix}`,
+          customer_id: customer.id,
+          status: "scheduled",
+          address: `${streetName} ${houseNumber}, Koeln`,
+        })
+        .select("*")
+        .single();
+
+      if (jobError || !job) {
+        throw new Error(jobError?.message ?? "Job setup failed");
+      }
+      jobId = job.id;
+
+      const result = await jobCompleteTool.execute(
+        {
+          companyName: customerName,
+          street: streetName,
+          houseNumber,
+        },
+        testCtx as any,
+        true,
+      );
+
+      expect(result.ok).toBe(true);
+
+      if (!result.ok) {
+        throw new Error(`Expected success, got: ${result.message}`);
+      }
+
+      expect(result.job.status).toBe("done");
+      expect(result.job.scheduled_end).toBeTruthy();
+    } finally {
+      if (jobId) {
+        await supabase.from("jobs").delete().eq("id", jobId);
       }
       if (customerId) {
         await supabase.from("customers").delete().eq("id", customerId);

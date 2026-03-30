@@ -1,13 +1,13 @@
 import { z } from "zod";
 import { defineTool } from "../defineTool";
 import { getBusinessProvider } from "@/features/integrations/business/get-business-provider";
-import type { JobUpdateArgs } from "@/features/integrations/business/type";
+import type { JobCompleteArgs } from "@/features/integrations/business/type";
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export const JobUpdateSchema = z
+export const JobCompleteSchema = z
   .object({
     jobNumber: z
       .string()
@@ -26,26 +26,6 @@ export const JobUpdateSchema = z
       .nullable(),
     houseNumber: z.string().optional().nullable(),
     street: z.string().optional().nullable(),
-    newAddress: z.string().optional().nullable(),
-    scheduledDate: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
-      .optional()
-      .nullable(),
-    scheduledTime: z
-      .string()
-      .regex(/^\d{2}:\d{2}$/)
-      .optional()
-      .nullable(),
-    scheduledEndTime: z
-      .string()
-      .regex(/^\d{2}:\d{2}$/)
-      .optional()
-      .nullable(),
-    status: z
-      .enum(["new", "scheduled", "done", "cancelled"])
-      .optional()
-      .nullable(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -82,61 +62,31 @@ export const JobUpdateSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "Fuer job_update brauche ich mindestens eine Auftragsreferenz wie Auftragsnummer, Kunde oder Strasse.",
-      });
-    }
-
-    const hasUpdateField = [
-      value.newAddress?.trim(),
-      value.scheduledDate?.trim(),
-      value.scheduledTime?.trim(),
-      value.scheduledEndTime?.trim(),
-      value.status?.trim(),
-    ].some(Boolean);
-
-    if (!hasUpdateField) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "Fuer job_update brauche ich mindestens ein zu aenderndes Feld wie status, scheduledDate oder newAddress.",
-      });
-    }
-
-    if (value.scheduledEndTime?.trim() && !value.scheduledTime?.trim()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["scheduledEndTime"],
-        message:
-          "scheduledEndTime braucht auch eine scheduledTime als Startzeit.",
+          "Fuer job_complete brauche ich mindestens eine Auftragsreferenz wie Auftragsnummer, Kunde oder Strasse.",
       });
     }
   });
 
-export const jobUpdateTool = defineTool({
-  name: "job_update",
+export const jobCompleteTool = defineTool({
+  name: "job_complete",
   description:
-    "Aktualisiert einen bestehenden Auftrag. Nutze zur Aufloesung jobNumber oder Kunde plus Strasse/Hausnummer. Geaendert werden koennen Status, geplantes Datum, geplante Uhrzeit und die neue Adresse. Freie Notizen gehoeren in note_create, Mitarbeiterzuweisung in job_dispatch.",
-  schema: JobUpdateSchema,
+    "Markiert einen bestehenden Auftrag als erledigt. Nutze zur Aufloesung jobNumber oder Kunde plus Strasse/Hausnummer. Wenn mehrere Auftraege passen, frage gezielt nach dem richtigen Auftrag.",
+  schema: JobCompleteSchema,
 
-  async execute(args: JobUpdateArgs, ctx, debug = false) {
+  async execute(args: JobCompleteArgs, ctx, debug = false) {
     const provider = getBusinessProvider();
-    return await provider.jobUpdate(args, debug);
+    return await provider.jobComplete(args, debug);
   },
 
   render(args, result, ctx) {
     if (!result || typeof result !== "object" || !("ok" in result)) {
-      return "Auftrag wurde aktualisiert.";
+      return "Auftrag wurde abgeschlossen.";
     }
 
     if (!result.ok) {
       return result.message;
     }
 
-    const updatedFields =
-      result.updatedFields.length > 0
-        ? ` Geaendert: ${result.updatedFields.join(", ")}.`
-        : "";
-
-    return `Auftrag ${result.job.job_number} wurde aktualisiert.${updatedFields}`;
+    return `Auftrag ${result.job.job_number} wurde als erledigt markiert.`;
   },
 });

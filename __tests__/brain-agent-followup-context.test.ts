@@ -79,6 +79,9 @@ describe("brainAgent pending follow-up context", () => {
     expect(secondCallInput.text).toContain(
       "Offene Optionen: J-100 (Aegidiusstrasse 12) | J-101 (Mondgasse 14)",
     );
+    expect(secondCallInput.text).toContain(
+      "Erkannte Auswahl aus den offenen Optionen: J-100 (Aegidiusstrasse 12)",
+    );
     expect(secondCallInput.text).toContain("Aktuelle Nutzerantwort: Nimm J-100.");
 
     const clearedPendingSession = sessionStore.get("chat-1");
